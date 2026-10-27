@@ -31,6 +31,7 @@ typedef enum {
 	CMD_SPEED,           /* arg = kB/s, 0 = drive max */
 	CMD_SWAP,            /* toggle sample byte-swap */
 	CMD_RELOAD,          /* re-read TOC */
+	CMD_TONE,            /* toggle test tone (440 Hz left, 1 kHz right) */
 } player_cmd_t;
 
 typedef struct {
@@ -39,6 +40,7 @@ typedef struct {
 	repeat_mode_t repeat;
 	bool shuffle;
 	bool swap;
+	bool tone;
 	int  volume;
 	int  track;          /* index in toc of the track being heard, -1 if none */
 	u32  track_elapsed;  /* sectors into the current track */

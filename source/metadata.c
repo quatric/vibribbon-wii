@@ -1,10 +1,9 @@
 /*
  * metadata - album/track names from MusicBrainz, looked up by disc ID with
- * libcurl and cached on SD so a disc only ever needs one network request.
+ * HTTPS (mbedTLS) and cached on SD so a disc only ever needs one network request.
  */
 #include <gccore.h>
 #include <ogc/lwp_watchdog.h>
-#include <curl/curl.h>
 #include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,8 +14,9 @@
 #include "netlog.h"
 #include "json.h"
 #include "sha1.h"
+#include "http.h"
 
-#define MB_HOST        "http://musicbrainz.org"
+#define MB_HOST        "https://musicbrainz.org"
 #define USER_AGENT     "WiiCD/0.1.0 ( https://github.com/quatric/WiiCD )"
 #define CACHE_DIR      "sd:/apps/cdplayer/cache"
 #define MAX_BODY       (4 * 1024 * 1024)
@@ -36,7 +36,6 @@ static cd_text_t cur_txt;
 static char cur_discid[DISCID_LEN];
 static char cur_source[96];
 
-static bool curl_ready;
 static u64 last_request;
 
 const char *meta_state_str(meta_state_t s)
@@ -152,55 +151,15 @@ static void credit_str(const jnode *ac, char *out, int cap)
 	to_ascii(tmp, out, cap);
 }
 
-/* ---- HTTP via libcurl ---- */
-
-typedef struct {
-	char *data;
-	size_t len, cap;
-} body_t;
-
-static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *user)
-{
-	body_t *b = user;
-	size_t n = size * nmemb;
-
-	if (b->len + n + 1 > MAX_BODY)
-		return 0;
-	if (b->len + n + 1 > b->cap) {
-		size_t nc = b->cap ? b->cap * 2 : 64 * 1024;
-		char *nd;
-		while (nc < b->len + n + 1)
-			nc *= 2;
-		nd = realloc(b->data, nc);
-		if (!nd)
-			return 0;
-		b->data = nd;
-		b->cap = nc;
-	}
-	memcpy(b->data + b->len, ptr, n);
-	b->len += n;
-	b->data[b->len] = 0;
-	return n;
-}
+/* ---- HTTP ---- */
 
 /* GET url; returns HTTP status (or -1 on transport error); *out must be freed */
-static long http_get(const char *url, char **out)
+static long mb_get(const char *url, char **out)
 {
-	CURL *c;
-	CURLcode rc;
-	body_t b = { NULL, 0, 0 };
-	long code = -1;
+	char err[128];
+	size_t len;
 	u64 since;
-
-	*out = NULL;
-	if (!curl_ready) {
-		if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
-			dlog("meta: curl_global_init failed");
-			return -1;
-		}
-		curl_ready = true;
-		dlog("meta: %s", curl_version());
-	}
+	int code;
 
 	/* MusicBrainz asks for at most one request per second */
 	since = ticks_to_millisecs(diff_ticks(last_request, gettime()));
@@ -208,33 +167,10 @@ static long http_get(const char *url, char **out)
 		usleep((1100 - since) * 1000);
 	last_request = gettime();
 
-	c = curl_easy_init();
-	if (!c)
-		return -1;
-	curl_easy_setopt(c, CURLOPT_URL, url);
-	curl_easy_setopt(c, CURLOPT_USERAGENT, USER_AGENT);
-	curl_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "");
-	curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_cb);
-	curl_easy_setopt(c, CURLOPT_WRITEDATA, &b);
-	curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 10L);
-	curl_easy_setopt(c, CURLOPT_TIMEOUT, 30L);
-	curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
-	curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
-	curl_easy_setopt(c, CURLOPT_MAXREDIRS, 3L);
-
-	rc = curl_easy_perform(c);
-	if (rc == CURLE_OK)
-		curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code);
-	else
-		dlog("meta: curl: %s", curl_easy_strerror(rc));
-	curl_easy_cleanup(c);
-
-	if (code > 0 && b.data) {
-		*out = b.data;
-	} else {
-		free(b.data);
-	}
-	dlog("meta: GET %s -> %ld (%u bytes)", url + strlen(MB_HOST), code, (u32)b.len);
+	code = http_get(url, USER_AGENT, MAX_BODY, out, &len, err, sizeof(err));
+	if (code < 0)
+		dlog("meta: %s", err);
+	dlog("meta: GET %s -> %d (%u bytes)", url + strlen(MB_HOST), code, (u32)len);
 	return code;
 }
 
@@ -345,7 +281,7 @@ meta_state_t meta_lookup(int first, int last, u32 leadout, const u32 *offsets, c
 		n += snprintf(url + n, sizeof(url) - n, "+%u", offsets[i]);
 
 	for (attempt = 0; attempt < 3; attempt++) {
-		code = http_get(url, &body);
+		code = mb_get(url, &body);
 		if (code != 503)
 			break;
 		free(body);
@@ -373,7 +309,7 @@ meta_state_t meta_lookup(int first, int last, u32 leadout, const u32 *offsets, c
 		int pos = (int)json_num(medium, "position", 1);
 		snprintf(url, sizeof(url), MB_HOST "/ws/2/release/%s?fmt=json&inc=artist-credits+recordings",
 		         json_str(release, "id"));
-		if (http_get(url, &body2) == 200 && body2 && (rel_root = json_parse(body2))) {
+		if (mb_get(url, &body2) == 200 && body2 && (rel_root = json_parse(body2))) {
 			const jnode *media = json_get(rel_root, "media"), *m;
 			release = rel_root;
 			for (m = media ? media->child : NULL; m; m = m->next)
@@ -543,10 +479,8 @@ void meta_init(void)
 
 void meta_shutdown(void)
 {
+	/* a lookup in flight finishes within the HTTP timeout; don't block exit on it */
 	quit = true;
-	/* a lookup in flight finishes within curl's timeout; don't block exit on it */
-	if (curl_ready)
-		curl_global_cleanup();
 }
 
 void meta_request(const cd_toc_t *toc)

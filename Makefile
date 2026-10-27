@@ -19,21 +19,22 @@ TARGET		:=	cdplayer
 BUILD		:=	build
 SOURCES		:=	source
 DATA		:=	data
-INCLUDES	:=
+INCLUDES	:=	config
 
 #---------------------------------------------------------------------------------
 # options for code generation
 #---------------------------------------------------------------------------------
 
-CFLAGS	= -g -O2 -Wall -Wno-format-truncation -Wno-stringop-truncation $(MACHDEP) $(INCLUDE)
+CFLAGS	= -g -O2 -Wall -Wno-format-truncation -Wno-stringop-truncation $(MACHDEP) $(INCLUDE) \
+	  -DMBEDTLS_CONFIG_FILE=\"mbedtls_wii.h\"
 CXXFLAGS	=	$(CFLAGS)
 
-LDFLAGS	=	-g $(MACHDEP) -Wl,-Map,$(notdir $@).map -Wl,--wrap=fcntl,--wrap=getsockopt
+LDFLAGS	=	-g $(MACHDEP) -Wl,-Map,$(notdir $@).map
 
 #---------------------------------------------------------------------------------
 # any extra libraries we wish to link with the project
 #---------------------------------------------------------------------------------
-LIBS	:=	-lcurl -lz -lfat -lasnd -lwiiuse -lbte -logc -lm
+LIBS	:=	-lmbedtls -lfat -lwiiuse -lbte -logc -lm
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
@@ -97,7 +98,7 @@ export OUTPUT	:=	$(CURDIR)/$(TARGET)
 
 #---------------------------------------------------------------------------------
 $(BUILD):
-	@[ -f third_party/wii/lib/libcurl.a ] || ./tools/build-curl.sh
+	@[ -f third_party/wii/lib/libmbedtls.a ] || ./tools/build-mbedtls.sh
 	@[ -d $@ ] || mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 

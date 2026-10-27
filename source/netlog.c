@@ -169,6 +169,7 @@ static const char *help_text =
 	"  eject | vol 0-255 | repeat | shuffle | reload\n"
 	"  speed KBPS        SET CD SPEED (176=1x, 0=max)\n"
 	"  swap              toggle CD-DA byte swap\n"
+	"  tone              toggle test tone (440 Hz left, 1 kHz right)\n"
 	"  read LBA [N]      READ CD N raw audio sectors, print stats + first bytes\n"
 	"  cdb HEX.. [len=N] [out]  raw SCSI command (data-in unless 'out')\n"
 	"  reset | reprobe   BOT reset recovery / close + rediscover drive\n"
@@ -364,6 +365,7 @@ static void run_command(char *line)
 	else if (!strcmp(line, "reload")) player_cmd(CMD_RELOAD, 0);
 	else if (!strcmp(line, "speed")) player_cmd(CMD_SPEED, atoi(arg));
 	else if (!strcmp(line, "swap")) player_cmd(CMD_SWAP, 0);
+	else if (!strcmp(line, "tone")) player_cmd(CMD_TONE, 0);
 	else if (!strcmp(line, "read")) cmd_read(arg);
 	else if (!strcmp(line, "cdb")) cmd_cdb(arg);
 	else if (!strcmp(line, "reset")) print_result("reset", usbcd_reset());

@@ -1,5 +1,5 @@
 /*
- * metadata - album/track names from MusicBrainz (via libcurl), cached on SD.
+ * metadata - album/track names from MusicBrainz (over HTTPS), cached on SD.
  */
 #ifndef METADATA_H
 #define METADATA_H
