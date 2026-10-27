@@ -1,0 +1,10 @@
+build/
+dist/
+*.elf
+*.dol
+*.map
+third_party/build/
+third_party/src/
+third_party/wii/
+.codesight/
+.DS_Store

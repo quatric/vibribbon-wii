@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<app version="1">
+	<name>Wii CD Player</name>
+	<coder>quatric</coder>
+	<version>0.1.0</version>
+	<release_date>20261027000000</release_date>
+	<short_description>Play audio CDs from a USB optical drive</short_description>
+	<long_description>Plays audio CDs from a USB CD/DVD drive plugged into the Wii, reading raw CD-DA over USB mass storage (SCSI/MMC READ CD). Shows CD-TEXT, supports repeat, shuffle and scanning.
+
+Debug shell: nc &lt;wii-ip&gt; 5555
+Log file: sd:/cdplayer.log</long_description>
+	<ahb_access/>
+</app>
