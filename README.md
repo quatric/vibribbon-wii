@@ -25,6 +25,14 @@ USB drive ──BOT/SCSI──> usbcd.c ──READ CD 0xBE──> cdplayer.c rin
   runs commands and reads ahead about 3.4 s. A feeder thread double-buffers
   that audio into ASND. If a read fails, that chunk plays as silence and
   playback continues.
+* **`source/metadata.c`** names the disc. It computes the MusicBrainz disc ID
+  from the TOC, checks the SD cache (`sd:/apps/cdplayer/cache/<discid>.txt`),
+  and otherwise asks MusicBrainz over HTTP with libcurl. If the exact disc ID
+  isn't in the database, MusicBrainz's fuzzy TOC search is used instead, and
+  the disc whose TOC is closest is picked. That matters for multi-disc sets
+  where every disc has the same number of tracks. MusicBrainz names take
+  priority over CD-TEXT, and CD-TEXT fills any gaps. Accents and curly quotes
+  are converted to ASCII because the console font has no other characters.
 * **`source/netlog.c`** keeps a debug log, mirrors it to `sd:/cdplayer.log` and
   serves it with a small command shell on TCP port 5555.
 * **`source/main.c`** draws the console UI on the TV and handles input from the
@@ -37,8 +45,28 @@ make dist
 ```
 
 `dist/apps/cdplayer/` (`boot.dol`, `meta.xml`, `icon.png`) goes on the SD card
-under `/apps/`. You need devkitPPC and libogc. The icon script needs Python 3
-with Pillow.
+under `/apps/`. You need devkitPPC, libogc, `ppc-zlib`, CMake, and Python 3
+with Pillow (for the icon).
+
+The first build runs `tools/build-curl.sh`. It downloads curl 8.23.0, checks
+the tarball against curl's published SHA-256, and cross-compiles a static,
+HTTP-only libcurl with gzip into `third_party/wii/`. Run it with `--force` to
+rebuild.
+
+### libcurl on the Wii
+
+The libcurl build relies on libogc's BSD socket layer, which has a few gaps.
+`source/wii_compat.c` fills them:
+
+| Problem in libogc | Fix |
+|---|---|
+| `fcntl(F_SETFL, O_NONBLOCK)` passes newlib's `0x4000` to IOS, which expects `0x04` | `--wrap=fcntl` translates the flag both ways |
+| `getsockopt()` is a stub that always returns `EINVAL`, so curl treats every non-blocking connect as failed | `--wrap=getsockopt` answers `SO_ERROR` with 0. A refused connection still shows up on the first send or recv |
+| `select()` isn't implemented | implemented on top of `poll()` |
+| `getaddrinfo()` isn't implemented | curl is built to use `gethostbyname()` |
+
+HTTPS isn't built in yet because MusicBrainz is reachable over plain HTTP.
+Adding mbedTLS would be the next step if that ever changes.
 
 ## Fast iteration over the network
 
@@ -80,7 +108,10 @@ commands, in this order:
    level and first bytes. On silence at the start of a track, try a few
    seconds in, e.g. `read 2000 4`.
 5. `play 1`, `status`: check the buffer fill, underruns and average read time.
-6. `cdb ...`: sends any raw SCSI command, e.g.
+6. `meta`: shows the disc ID, the lookup state and the names it found.
+   `meta refresh` skips the cache and asks MusicBrainz again. `lookup FIRST
+   LAST LEADOUT OFFSETS...` looks up any TOC, even with no drive attached.
+7. `cdb ...`: sends any raw SCSI command, e.g.
    `cdb 43 00 00 00 00 00 00 03 24 00 len=804` (READ TOC) or
    `cdb 4a 01 00 00 10 00 00 00 08 00 len=8` (GET EVENT STATUS, media).
 

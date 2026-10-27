@@ -13,6 +13,7 @@
 #include "usbcd.h"
 #include "cdplayer.h"
 #include "netlog.h"
+#include "metadata.h"
 
 #define VERSION "0.1.0"
 
@@ -85,7 +86,21 @@ static const char *track_name(const cd_text_t *txt, const cd_track_t *t, char *t
 	return tmp;
 }
 
-static void draw(const player_status_t *s, const cd_toc_t *toc, const cd_text_t *txt, bool have_disc, int cursor)
+/* MusicBrainz results win; CD-TEXT fills anything they don't cover */
+static void merge_meta(cd_text_t *txt, const cd_text_t *m)
+{
+	int i;
+	if (m->album[0]) strcpy(txt->album, m->album);
+	if (m->artist[0]) strcpy(txt->artist, m->artist);
+	for (i = 0; i < CD_MAX_TRACKS; i++) {
+		if (m->title[i][0]) strcpy(txt->title[i], m->title[i]);
+		if (m->title[i][0]) strcpy(txt->performer[i], m->performer[i]);
+	}
+	txt->present = true;
+}
+
+static void draw(const player_status_t *s, const cd_toc_t *toc, const cd_text_t *txt, bool have_disc, int cursor,
+                 meta_state_t ms)
 {
 	static const char *rep[] = { "Off", "All", "One" };
 	char tmp[64], el[16], len[16], bar[48];
@@ -105,7 +120,9 @@ static void draw(const player_status_t *s, const cd_toc_t *toc, const cd_text_t 
 			row(3, C_BRIGHT, "%s%s%s", txt->album, txt->artist[0] ? " - " : "", txt->artist);
 		else
 			row(3, C_BRIGHT, "Audio CD");
-		row(4, C_DIM, "%d audio track%s, %s total", toc->audio_count, toc->audio_count == 1 ? "" : "s", len);
+		row(4, C_DIM, "%d audio track%s, %s total   [%s]", toc->audio_count, toc->audio_count == 1 ? "" : "s", len,
+		    ms != META_NONE && ms != META_NOT_FOUND && ms != META_ERROR ? meta_state_str(ms)
+		    : txt->present ? "CD-TEXT" : ms != META_NONE ? meta_state_str(ms) : "no names");
 	} else {
 		row(3, C_WARN, "%s", s->status_msg);
 		row(4, "", " ");
@@ -182,8 +199,9 @@ static void draw(const player_status_t *s, const cd_toc_t *toc, const cd_text_t 
 int main(int argc, char **argv)
 {
 	static cd_toc_t toc;
-	static cd_text_t txt;
+	static cd_text_t txt, mtxt;
 	player_status_t s;
+	meta_state_t ms;
 	int cursor = 0, last_heard = -1;
 	u64 hold_start = 0, last_scan = 0, last_draw = 0;
 	bool scanned = false;
@@ -196,6 +214,7 @@ int main(int argc, char **argv)
 		printf("USB init failed\n");
 
 	netlog_init(true);
+	meta_init();
 	dlog("Wii CD Player %s, IOS%d v%d", VERSION, IOS_GetVersion(), IOS_GetRevision());
 	if (IOS_GetVersion() != 58)
 		dlog("warning: not running under IOS58, USB 2.0 may be unavailable");
@@ -224,6 +243,9 @@ int main(int argc, char **argv)
 
 		player_get_status(&s);
 		have_disc = player_get_disc(&toc, &txt);
+		ms = meta_get(&mtxt, NULL, NULL, 0);
+		if (have_disc && (ms == META_FOUND || ms == META_CACHED))
+			merge_meta(&txt, &mtxt);
 		if (!have_disc)
 			cursor = 0;
 		else if (cursor >= toc.count)
@@ -299,7 +321,7 @@ int main(int argc, char **argv)
 		}
 
 		if (now_ms() - last_draw >= 66) {
-			draw(&s, &toc, &txt, have_disc, cursor);
+			draw(&s, &toc, &txt, have_disc, cursor, ms);
 			last_draw = now_ms();
 		}
 		VIDEO_WaitVSync();
@@ -308,6 +330,7 @@ int main(int argc, char **argv)
 	printf("\x1b[2J\x1b[2;0HShutting down...\n");
 	dlog("exiting");
 	player_shutdown();
+	meta_shutdown();
 	usbcd_close();
 	netlog_shutdown();
 	WPAD_Shutdown();

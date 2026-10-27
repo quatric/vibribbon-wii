@@ -18,6 +18,7 @@
 
 #include "cdplayer.h"
 #include "netlog.h"
+#include "metadata.h"
 
 #define VOICE          0
 #define SLOT_SECTORS   8                                 /* ~107 ms per slot */
@@ -250,6 +251,7 @@ static void unload_disc(void)
 	memset(&toc, 0, sizeof(toc));
 	memset(&cdtext, 0, sizeof(cdtext));
 	LWP_MutexUnlock(state_lock);
+	meta_request(NULL);
 }
 
 static void play_track(int idx, u32 lba)
@@ -312,6 +314,8 @@ static void load_disc(void)
 		dlog("speed: SET CD SPEED not accepted (%d)", r);
 
 	build_order(-1);
+	if (ntoc.audio_count > 0)
+		meta_request(&ntoc);
 	set_drive(ntoc.audio_count > 0 ? DRIVE_READY : DRIVE_NO_AUDIO);
 	set_msg(ntoc.audio_count > 0 ? "Disc ready" : "No audio tracks on this disc");
 }

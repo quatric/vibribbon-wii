@@ -21,6 +21,7 @@
 #include "netlog.h"
 #include "usbcd.h"
 #include "cdplayer.h"
+#include "metadata.h"
 
 #define LOG_LINES     512
 #define LOG_LINE_LEN  160
@@ -171,6 +172,8 @@ static const char *help_text =
 	"  read LBA [N]      READ CD N raw audio sectors, print stats + first bytes\n"
 	"  cdb HEX.. [len=N] [out]  raw SCSI command (data-in unless 'out')\n"
 	"  reset | reprobe   BOT reset recovery / close + rediscover drive\n"
+	"  meta [refresh]    disc ID + metadata status / force a MusicBrainz lookup\n"
+	"  lookup F L LEADOUT OFF1 OFF2 ...  MusicBrainz lookup of any TOC (offsets +150)\n"
 	"  log               replay the log buffer\n"
 	"  quit              disconnect\n";
 
@@ -264,6 +267,63 @@ static void cmd_cdb(char *args)
 		hexdump(buf, got > 512 ? 512 : got);
 }
 
+static void print_text(const cd_text_t *t)
+{
+	int i;
+	cprintf("album:  %s\nartist: %s\n", t->album, t->artist);
+	for (i = 0; i < CD_MAX_TRACKS; i++)
+		if (t->title[i][0])
+			cprintf("  %02d %s%s%s\n", i + 1, t->title[i], t->performer[i][0] ? "  /  " : "", t->performer[i]);
+}
+
+static void cmd_meta(char *arg)
+{
+	static cd_text_t t;
+	char id[DISCID_LEN], src[96];
+	meta_state_t s;
+	if (!strcmp(arg, "refresh")) {
+		meta_refresh();
+		cprintf("lookup queued\n");
+		return;
+	}
+	s = meta_get(&t, id, src, sizeof(src));
+	cprintf("disc id: %s\nstate:   %s\nsource:  %s\n", id[0] ? id : "-", meta_state_str(s), src);
+	if (s == META_FOUND || s == META_CACHED)
+		print_text(&t);
+}
+
+static void cmd_lookup(char *arg)
+{
+	static cd_text_t t;
+	u32 v[102], offs[CD_MAX_TRACKS];
+	int n = 0, first, last, i;
+	char id[DISCID_LEN], src[96] = "";
+	meta_state_t s;
+
+	while (*arg && n < 102) {
+		char *end;
+		v[n] = strtoul(arg, &end, 10);
+		if (end == arg) break;
+		n++;
+		arg = end;
+	}
+	first = n > 0 ? v[0] : 0;
+	last = n > 1 ? v[1] : 0;
+	if (n < 4 || first < 1 || last < first || last > 99 || n != 3 + last - first + 1) {
+		cprintf("usage: lookup FIRST LAST LEADOUT OFFSET... (one offset per track)\n");
+		return;
+	}
+	for (i = 0; i <= last - first; i++)
+		offs[i] = v[3 + i];
+	meta_discid(first, last, v[2], offs, id);
+	cprintf("disc id %s, querying MusicBrainz...\n", id);
+	memset(&t, 0, sizeof(t));
+	s = meta_lookup(first, last, v[2], offs, &t, src, sizeof(src));
+	cprintf("result: %s%s%s\n", meta_state_str(s), src[0] ? ", " : "", src);
+	if (s == META_FOUND)
+		print_text(&t);
+}
+
 static void run_command(char *line)
 {
 	char *arg;
@@ -308,6 +368,8 @@ static void run_command(char *line)
 	else if (!strcmp(line, "cdb")) cmd_cdb(arg);
 	else if (!strcmp(line, "reset")) print_result("reset", usbcd_reset());
 	else if (!strcmp(line, "reprobe")) { usbcd_close(); cprintf("closed; drive thread will rediscover\n"); }
+	else if (!strcmp(line, "meta")) cmd_meta(arg);
+	else if (!strcmp(line, "lookup")) cmd_lookup(arg);
 	else if (!strcmp(line, "log")) {
 		u32 i, from;
 		LWP_MutexLock(log_lock);
