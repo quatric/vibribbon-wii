@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "wii_host.h"
+
 #define MAX_SEG 100
 #define MAX_TRK 100
 
@@ -154,7 +156,7 @@ int iso_read_sector(void *h, uint32_t lba, uint8_t *buf, int size)
     (void)size;
     disc_t *d = (disc_t *)h;
     seg_t *s = d ? find_seg(d, lba) : NULL;
-    g_wii_iso_reads++;
+    if (g_wii_iso_reads++ < 64) wii_log("iso: read lba %u\n", (unsigned)lba);
     if (!s) { g_wii_iso_fail++; return 0; }
     uint32_t rel = lba - s->start;
     long off = s->raw ? (long)rel * 2352 + (s->mode2 ? 24 : 16) : (long)rel * 2048;
@@ -166,7 +168,7 @@ int iso_read_raw_sector(void *h, uint32_t lba, uint8_t *buf, int size)
 {
     disc_t *d = (disc_t *)h;
     seg_t *s = d ? find_seg(d, lba) : NULL;
-    g_wii_iso_reads++;
+    if (g_wii_iso_reads++ < 64) wii_log("iso: read lba %u\n", (unsigned)lba);
     if (!s || size < 2352 || !s->raw) { g_wii_iso_fail++; return 0; }
     if (fseek(s->f, (long)(lba - s->start) * 2352, SEEK_SET) != 0) return 0;
     return fread(buf, 1, 2352, s->f) == 2352;

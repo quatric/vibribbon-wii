@@ -74,6 +74,11 @@ EXACT.append(("src/memory.c",
      "        uint32_t v;\n        memcpy(&v, &ram[phys], sizeof(v));\n"
      "#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__\n        v = __builtin_bswap32(v);\n#endif\n"
      "        /* Targeted main-RAM read watch"))
+EXACT.append(("src/cdrom.c",
+     "        memcpy(&val, RB_.data + RB_.pos, 4);\n        RB_.pos += 4;",
+     "        memcpy(&val, RB_.data + RB_.pos, 4);\n"
+     "#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__\n        val = __builtin_bswap32(val);\n#endif\n"
+     "        RB_.pos += 4;"))
 for rel, old, new in EXACT:
     path = f"{root}/{rel}"
     text = open(path).read()

@@ -13,6 +13,7 @@
 #include "gpu.h"
 #include "sio.h"
 #include "psx_bios_backend.h"
+#include "bios_hle.h"
 #include "psx_scheduler.h"
 #include "wii_host.h"
 
@@ -87,6 +88,18 @@ static void *watchdog(void *arg)
     }
     return NULL;
 }
+
+/* Debug aid: sample the dispatcher through the BIOS HLE hook it calls first. */
+static int (*s_real_hook)(struct CPUState *, uint32_t);
+static int trace_hook(struct CPUState *cpu, uint32_t phys)
+{
+    static uint32_t n;
+    int r = s_real_hook ? s_real_hook(cpu, phys) : 0;
+    if ((++n & 0xFFFF) == 0 || r || n < 32)
+        wii_log("hook #%u phys=%08X ra=%08X r=%d\n", (unsigned)n, (unsigned)phys,
+                (unsigned)cpu->gpr[31], r);
+    return r;
+}
 #endif
 
 /* PS1 pad word is active low: SELECT L3 R3 START UP RIGHT DOWN LEFT
@@ -155,6 +168,10 @@ void wii_run_game(void)
 
     if (!psx_bios_bundled() || !psx_bios_activate(psx_bios_bundled()))
         wii_fatal("no bundled BIOS backend");
+#ifdef VIB_EXIT_SECONDS
+    s_real_hook = g_psx_bios_hle_hook;
+    g_psx_bios_hle_hook = trace_hook;
+#endif
 
     s_cpu.read_word  = psx_read_word;
     s_cpu.write_word = psx_write_word;
@@ -188,7 +205,7 @@ void wii_run_game(void)
     psx_irq_set_cause_ptr(&s_cpu.cop0[13]);
 
 #ifdef VIB_EXIT_SECONDS
-    { lwp_t t; LWP_CreateThread(&t, watchdog, NULL, NULL, 8192, 100); }
+    { lwp_t t; LWP_CreateThread(&t, watchdog, NULL, NULL, 8192, LWP_PRIO_HIGHEST); }
 #endif
     g_idle_skip_enabled = 1;      /* skip spin-waits for vblank instead of burning cycles */
     wii_stage(8, "about to run scheduler");
