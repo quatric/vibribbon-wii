@@ -8,3 +8,6 @@ third_party/src/
 third_party/wii/
 .codesight/
 .DS_Store
+vibribbon/
+*.bin
+*.cue
