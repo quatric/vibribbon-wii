@@ -55,7 +55,8 @@ def main():
         files = disc_files(f)
         out = sys.argv[3] if sys.argv[2] == "extract" else None
         for path, (lba, size) in sorted(files.items()):
-            if not path.upper().endswith(("FILES.PAK", ".EXE", ".VH", ".VB")):
+            if not (path.upper().endswith(("FILES.PAK", ".EXE", ".VH", ".VB"))
+                    or path.upper().startswith("SCES_")):
                 continue
             data = read_file(f, lba, size)
             if out:
