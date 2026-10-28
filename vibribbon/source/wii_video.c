@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <gccore.h>
 
 #include "wii_host.h"
@@ -57,6 +58,7 @@ void wii_log(const char *fmt, ...)
         vfprintf(s_logf, fmt, ap);
         va_end(ap);
         fflush(s_logf);
+        fsync(fileno(s_logf));
     }
 }
 
@@ -112,4 +114,17 @@ void wii_present(const uint16_t *vram, int x, int y, int w, int h)
     VIDEO_SetNextFramebuffer(s_xfb[s_fb]);
     VIDEO_Flush();
     VIDEO_WaitVSync();
+}
+
+void wii_stage(int n, const char *what)
+{
+    wii_log("stage %d: %s\n", n, what);
+#ifdef VIB_STOP_AT
+    if (n == VIB_STOP_AT) {
+        wii_log("stopping at stage %d\n", n);
+        if (s_logf) fclose(s_logf);
+        SYS_ResetSystem(SYS_POWEROFF, 0, 0);
+        for (;;) VIDEO_WaitVSync();
+    }
+#endif
 }

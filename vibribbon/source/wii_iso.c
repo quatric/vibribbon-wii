@@ -50,6 +50,9 @@ static void dirname_of(const char *path, char *out, size_t n)
     out[len] = 0;
 }
 
+unsigned g_wii_iso_reads;
+unsigned g_wii_iso_fail;
+
 void *iso_open(const char *path)
 {
     disc_t *d = (disc_t *)calloc(1, sizeof(*d));
@@ -151,7 +154,8 @@ int iso_read_sector(void *h, uint32_t lba, uint8_t *buf, int size)
     (void)size;
     disc_t *d = (disc_t *)h;
     seg_t *s = d ? find_seg(d, lba) : NULL;
-    if (!s) return 0;
+    g_wii_iso_reads++;
+    if (!s) { g_wii_iso_fail++; return 0; }
     uint32_t rel = lba - s->start;
     long off = s->raw ? (long)rel * 2352 + (s->mode2 ? 24 : 16) : (long)rel * 2048;
     if (fseek(s->f, off, SEEK_SET) != 0) return 0;
@@ -162,7 +166,8 @@ int iso_read_raw_sector(void *h, uint32_t lba, uint8_t *buf, int size)
 {
     disc_t *d = (disc_t *)h;
     seg_t *s = d ? find_seg(d, lba) : NULL;
-    if (!s || size < 2352 || !s->raw) return 0;
+    g_wii_iso_reads++;
+    if (!s || size < 2352 || !s->raw) { g_wii_iso_fail++; return 0; }
     if (fseek(s->f, (long)(lba - s->start) * 2352, SEEK_SET) != 0) return 0;
     return fread(buf, 1, 2352, s->f) == 2352;
 }

@@ -1,9 +1,11 @@
 /* Boots the recompiled game on the PSXRecomp runtime: the same init order as
  * the desktop host (runtime/src/main.cpp), minus SDL/GL/netplay/launcher. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <gccore.h>
+#include <ogc/lwp_watchdog.h>
 #include <input_wii.h>
 #include <wiiuse/wpad.h>
 
@@ -37,28 +39,52 @@ extern void gpu_init(void);
 extern void cdrom_init(const char *disc_path);
 extern void psx_icache_reset(void);
 
+extern void dirty_ram_register_text_image(uint32_t phys_lo, const uint8_t *bytes, uint32_t len);
+
+/* The runtime trusts recompiled code only while guest RAM still matches the
+ * reference text; gen.sh builds that image from the disc (see scripts/gen.sh). */
+static void arm_text_guard(void)
+{
+    FILE *f = fopen(APP_DIR "text.bin", "rb");
+    uint8_t hdr[8];
+    if (!f || fread(hdr, 1, 8, f) != 8) {
+        wii_log("text.bin missing: running without the native-code guard\n");
+        if (f) fclose(f);
+        return;
+    }
+    uint32_t lo  = ((uint32_t)hdr[0] << 24) | ((uint32_t)hdr[1] << 16) | ((uint32_t)hdr[2] << 8) | hdr[3];
+    uint32_t len = ((uint32_t)hdr[4] << 24) | ((uint32_t)hdr[5] << 16) | ((uint32_t)hdr[6] << 8) | hdr[7];
+    uint8_t *img = (uint8_t *)malloc(len);
+    if (img && fread(img, 1, len, f) == len) {
+        dirty_ram_register_text_image(lo, img, len);   /* the runtime owns img now */
+        wii_log("text guard armed: phys 0x%08X len 0x%X\n", lo, len);
+    } else {
+        free(img);
+        wii_log("text.bin short read\n");
+    }
+    fclose(f);
+}
+
+extern uint64_t g_dirty_ram_insns_run;
+extern unsigned g_wii_iso_reads, g_wii_iso_fail;
+extern int cdrom_get_delivered_lba(void);
+extern uint32_t cdrom_get_burst_total(void);
+extern uint64_t psx_get_cycle_count(void);
+extern int g_idle_skip_enabled;
 static CPUState s_cpu;
 static volatile unsigned s_frames;
 
 #ifdef VIB_EXIT_SECONDS
-/* Debug aid for headless emulator runs: report state, then power off cleanly so
- * the emulator flushes the SD card folder. */
+/* Debug aid for headless emulator runs: sample the guest every 2 seconds. */
+extern volatile uint32_t g_psx_last_fn_entry;
 static void *watchdog(void *arg)
 {
     (void)arg;
-    for (int i = 0; i < VIB_EXIT_SECONDS; i++) {
-        sleep(1);
-        if (i % 5 == 4)
-            wii_log("t=%ds frames=%u pc=%08X ra=%08X sp=%08X\n", i + 1, s_frames,
-                    s_cpu.pc, s_cpu.gpr[31], s_cpu.gpr[29]);
+    for (int i = 1; i <= VIB_EXIT_SECONDS / 2; i++) {
+        sleep(2);
+        wii_log("t=%ds frames=%u pc=%08X ra=%08X sp=%08X lastfn=%08X\n", i * 2, s_frames,
+                s_cpu.pc, s_cpu.gpr[31], s_cpu.gpr[29], (unsigned)g_psx_last_fn_entry);
     }
-    GpuDisplayInfo di;
-    gpu_get_display_info(&di);
-    wii_dump_ppm(gpu_get_vram(), (int)di.display_x, (int)di.display_y,
-                 (int)di.width, (int)di.height, APP_DIR "final.ppm");
-    wii_dump_ppm(gpu_get_vram(), 0, 0, 1024, 512, APP_DIR "vram.ppm");
-    wii_log("watchdog: exiting\n");
-    SYS_ResetSystem(SYS_SHUTDOWN, 0, 0);
     return NULL;
 }
 #endif
@@ -86,23 +112,38 @@ static void on_vblank(void)
     static unsigned frame;
     frame++;
     s_frames = frame;
+    if (frame == 1)   wii_stage(9,  "first vblank");
+    if (frame == 10)  wii_stage(10, "10 vblanks");
+    if (frame == 120) wii_stage(11, "120 vblanks");
+    if (frame == 600) wii_stage(12, "600 vblanks");
     INPUT_Update();
     sio_set_pad_state_slot(0, map_buttons(INPUT_PadsHeld()));
 
     GpuDisplayInfo di;
     gpu_get_display_info(&di);
-    if (frame % 300 == 0)
-        wii_log("frame %u display %ux%u at (%u,%u) disabled=%d\n", frame,
-                di.width, di.height, di.display_x, di.display_y, di.disabled);
-    if (frame == 600 || frame == 1800 || frame == 3600 || frame == 7200) {
+    if (frame == 1 || frame % 60 == 0)
+        wii_log("frame %u display %ux%u at (%u,%u) disabled=%d pc=%08X\n", frame,
+                di.width, di.height, di.display_x, di.display_y, di.disabled, s_cpu.pc);
+    if (frame % 300 == 299) {
         char name[64];
         snprintf(name, sizeof(name), APP_DIR "dump_%05u.ppm", frame);
         wii_dump_ppm(gpu_get_vram(), (int)di.display_x, (int)di.display_y,
                      (int)di.width, (int)di.height, name);
     }
-    if (!di.disabled)
+    static uint64_t t_present, t_last;
+    uint64_t t0 = gettime();
+    if (!di.disabled && frame % 4 == 0)
         wii_present(gpu_get_vram(), (int)di.display_x, (int)di.display_y,
                     (int)di.width, (int)di.height);
+    t_present += gettime() - t0;
+    if (frame % 30 == 0) {
+        uint64_t now = gettime();
+        wii_log("perf: 30 frames %u ms (present %u), cycles %uM, cd: lba %d reads %u fail %u bursts %u\n",
+                (unsigned)ticks_to_millisecs(now - t_last), (unsigned)ticks_to_millisecs(t_present),
+                (unsigned)(psx_get_cycle_count() / 1000000u),
+                cdrom_get_delivered_lba(), g_wii_iso_reads, g_wii_iso_fail, (unsigned)cdrom_get_burst_total());
+        t_last = now; t_present = 0;
+    }
 }
 
 void wii_run_game(void)
@@ -110,6 +151,7 @@ void wii_run_game(void)
     wii_log("Vib-Ribbon (recompiled) starting\n");
 
     INPUT_Init();
+    wii_stage(3, "libwiiinput up");
 
     if (!psx_bios_bundled() || !psx_bios_activate(psx_bios_bundled()))
         wii_fatal("no bundled BIOS backend");
@@ -121,7 +163,9 @@ void wii_run_game(void)
     s_cpu.read_byte  = psx_read_byte;
     s_cpu.write_byte = psx_write_byte;
 
+    wii_stage(4, "bios backend active");
     memory_init(BIOS_PATH);
+    wii_stage(5, "memory_init done");
     gpu_init();
     dma_init();
     mdec_init();
@@ -129,7 +173,10 @@ void wii_run_game(void)
     interrupts_init();
     sio_init();
     spu_init();
+    wii_stage(6, "gpu/dma/mdec/timers/irq/sio/spu init done");
     cdrom_init(DISC_CUE);
+    wii_stage(7, "cdrom_init done");
+    arm_text_guard();
 
     sio_set_pad_connected(0, 1);
     gpu_set_vblank_callback(on_vblank);
@@ -143,6 +190,8 @@ void wii_run_game(void)
 #ifdef VIB_EXIT_SECONDS
     { lwp_t t; LWP_CreateThread(&t, watchdog, NULL, NULL, 8192, 100); }
 #endif
+    g_idle_skip_enabled = 1;      /* skip spin-waits for vblank instead of burning cycles */
+    wii_stage(8, "about to run scheduler");
     wii_log("executing from PC=0x%08X\n", s_cpu.pc);
     psx_scheduler_run(&s_cpu);
 

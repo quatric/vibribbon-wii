@@ -28,6 +28,9 @@ fi
 git -C "$FW" fetch -q origin "$FW_COMMIT" 2>/dev/null || true
 git -C "$FW" checkout -q "$FW_COMMIT"
 
+# Fit the runtime in the Wii's 24 MB and fix its little-endian host assumptions.
+python3 -I "$HERE/scripts/patch_runtime.py" "$FW"
+
 if [ ! -d "$GAME/.git" ]; then
     git clone -q --depth 1 "$GAME_REPO" "$GAME"
 fi
@@ -52,6 +55,23 @@ R="$FW/recompiler/build/psxrecomp-game"
 (cd "$FW" && bash tools/regen_bios.sh --config bios/OpenBIOS.toml >/dev/null)
 mkdir -p "$GEN/bios"
 cp "$FW"/generated/OpenBIOS_*.c "$GEN/bios/"
+
+# Reference text image for the runtime's native-code guard: the text of both
+# programs in one range, big-endian header {phys_lo, len} then the bytes.
+python3 -I - "$EXTRACT/SCES_028.73" "$EXTRACT/MAIN_G.EXE" "$B/text.bin" <<'PY'
+import struct, sys
+parts = []
+for path in sys.argv[1:3]:
+    d = open(path, "rb").read()
+    addr, size = struct.unpack_from("<II", d, 0x18)
+    parts.append((addr & 0x1FFFFFFF, d[0x800:0x800 + size]))
+lo = min(a for a, _ in parts)
+hi = max(a + len(b) for a, b in parts)
+img = bytearray(hi - lo)
+for a, b in parts:
+    img[a - lo:a - lo + len(b)] = b
+open(sys.argv[3], "wb").write(struct.pack(">II", lo, len(img)) + bytes(img))
+PY
 
 # USB/Wii/GameCube/Classic input and self-update libraries (devkitPPC).
 export DEVKITPRO="${DEVKITPRO:-/opt/devkitpro}" DEVKITPPC="${DEVKITPPC:-/opt/devkitpro/devkitPPC}"

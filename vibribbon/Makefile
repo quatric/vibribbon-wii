@@ -22,10 +22,10 @@ OBJ   := $(BUILD)/obj
 LIBOGC := /opt/devkitpro/libogc
 
 MACH := -mrvl -mcpu=750 -meabi -mhard-float
-DEFS := -DPSX_NO_DEBUG_TOOLS -DPSX_WII=1 $(if $(EXIT_SECONDS),-DVIB_EXIT_SECONDS=$(EXIT_SECONDS))
+DEFS := -DPSX_NO_DEBUG_TOOLS -DPSX_WII=1 -DPSX_NATIVE_BUILD=1 -DPSX_ENABLE_BLOCK_CYCLES=1 -DPSX_HAS_GAME_DISPATCH=1 $(if $(EXIT_SECONDS),-DVIB_EXIT_SECONDS=$(EXIT_SECONDS)) $(if $(STOP_AT),-DVIB_STOP_AT=$(STOP_AT))
 INC  := -Isource/shim -Isource -I$(RT)/include -I$(GEN)/main -I$(FW)/recompiler/src -I$(FW)/recompiler/lib/toml11 \
         -I$(BUILD)/libwiiinput/include -I$(LIBOGC)/include -I/opt/devkitpro/portlibs/ppc/include -I/opt/devkitpro/portlibs/wii/include
-CFLAGS   := -O2 $(MACH) $(DEFS) $(INC) -ffunction-sections -fdata-sections -Wno-unused-result
+CFLAGS   := -Os $(MACH) $(DEFS) $(INC) -ffunction-sections -fdata-sections -Wno-unused-result
 CXXFLAGS := $(CFLAGS) -std=gnu++17
 LDFLAGS  := $(MACH) -Wl,--gc-sections -L$(BUILD)/libwiiinput/lib -L$(LIBOGC)/lib/wii -L/opt/devkitpro/portlibs/ppc/lib -L/opt/devkitpro/portlibs/wii/lib
 LIBS     := -linput-wii -lwiikeyboard -lfat -lz -lwiiuse -lbte -logc -lm
