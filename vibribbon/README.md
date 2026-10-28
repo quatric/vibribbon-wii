@@ -13,19 +13,26 @@ the C is generated from it on your machine.
 Needs devkitPPC, libogc, CMake, Ninja, Python 3 and `gh`.
 
 ```sh
-scripts/gen.sh "/path/to/Vib-Ribbon (Europe) (En,Fr,De,Es,It) (Track 1).bin"
+scripts/gen.sh "/path/to/Vib-Ribbon (Europe) (En,Fr,De,Es,It) (Track 1).bin" [/path/to/SCPH5552.BIN]
 make
 ```
 
 `gen.sh` reads the boot executable and `MAIN_G.EXE` from the disc image, runs the
-recompiler on both, regenerates OpenBIOS (MIT licensed) and builds libwiiinput.
-Everything lands in `build/`.
+recompiler on both, recompiles the BIOS and builds libwiiinput. Everything lands
+in `build/`.
+
+The game is validated on Sony's SCPH-5552 (Europe) BIOS. Pass your own dump as
+the second argument; it must be 524288 bytes with SHA-256
+`1faaa18fa820a0225e488d9f086296b8e6c46df739666093987ff7d8fd352c09`. Without it
+the build falls back to OpenBIOS (MIT licensed), which boots but does not yet
+start the game.
 
 ## SD card layout
 
 ```
 sd:/apps/vibribbon/boot.dol
-sd:/apps/vibribbon/openbios.bin           (build/psxrecomp/bios/openbios.bin)
+sd:/apps/vibribbon/bios.bin               (build/bios.bin)
+sd:/apps/vibribbon/text.bin               (build/text.bin)
 sd:/apps/vibribbon/disc/Vib-Ribbon (Europe) (En,Fr,De,Es,It).cue
 sd:/apps/vibribbon/disc/... (Track N).bin  all eight, as referenced by the cue
 ```

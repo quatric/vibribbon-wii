@@ -52,9 +52,34 @@ R="$FW/recompiler/build/psxrecomp-game"
 "$R" "$EXTRACT/SCES_028.73" --project-root "$FW" --seeds "$GAME/seeds/ghidra_funcs.txt" --out-dir "$GEN/boot" --strict >/dev/null
 "$R" "$EXTRACT/MAIN_G.EXE" --project-root "$FW" --out-dir "$GEN/main" --strict >/dev/null
 
-(cd "$FW" && bash tools/regen_bios.sh --config bios/OpenBIOS.toml >/dev/null)
+# BIOS: the game is validated on Sony's SCPH-5552 (PAL). Pass your own dump as
+# the second argument to use it; without one the build falls back to OpenBIOS.
+SCPH5552_SHA256="1faaa18fa820a0225e488d9f086296b8e6c46df739666093987ff7d8fd352c09"
+BIOS_DUMP="${2:-}"
+if [ -n "$BIOS_DUMP" ]; then
+    got="$(shasum -a 256 "$BIOS_DUMP" | cut -d' ' -f1)"
+    if [ "$got" != "$SCPH5552_SHA256" ]; then
+        echo "gen.sh: $BIOS_DUMP is not an SCPH-5552 dump (sha256 $got)" >&2
+        exit 1
+    fi
+    cp "$BIOS_DUMP" "$FW/bios/SCPH5552.BIN"
+    BIOS_STEM=SCPH5552
+    BIOS_ROM="$FW/bios/SCPH5552.BIN"
+else
+    BIOS_STEM=OpenBIOS
+    BIOS_ROM="$FW/bios/openbios.bin"
+fi
+(cd "$FW" && bash tools/regen_bios.sh --config "bios/$BIOS_STEM.toml" >/dev/null)
+rm -f "$GEN"/bios/*.c
 mkdir -p "$GEN/bios"
-cp "$FW"/generated/OpenBIOS_*.c "$GEN/bios/"
+cp "$FW"/generated/"$BIOS_STEM"_*.c "$GEN/bios/"
+cat > "$GEN/bios/bios_registry.c" <<EOF
+#include "psx_bios_backend.h"
+extern const PsxBiosBackend ${BIOS_STEM}_psx_bios_backend;
+const PsxBiosBackend *const psx_bios_registry[] = { &${BIOS_STEM}_psx_bios_backend };
+const uint32_t psx_bios_registry_count = 1u;
+EOF
+cp "$BIOS_ROM" "$B/bios.bin"
 
 # Reference text image for the runtime's native-code guard: the text of both
 # programs in one range, big-endian header {phys_lo, len} then the bytes.

@@ -82,12 +82,12 @@ void wii_dump_ppm(const uint16_t *vram, int x, int y, int w, int h, const char *
 
 void wii_fatal(const char *fmt, ...)
 {
+    char msg[512];
     va_list ap;
-    printf("\n\nFATAL: ");
     va_start(ap, fmt);
-    vprintf(fmt, ap);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
-    printf("\n\nPress HOME to exit.\n");
+    wii_log("\n\nFATAL: %s\n\nPress HOME to exit.\n", msg);
     for (;;) VIDEO_WaitVSync();
 }
 

@@ -14,11 +14,12 @@
 #include "sio.h"
 #include "psx_bios_backend.h"
 #include "bios_hle.h"
+#include "cdrom.h"
 #include "psx_scheduler.h"
 #include "wii_host.h"
 
 #define APP_DIR   "sd:/apps/vibribbon/"
-#define BIOS_PATH APP_DIR "openbios.bin"
+#define BIOS_PATH APP_DIR "bios.bin"
 #define DISC_CUE  APP_DIR "disc/Vib-Ribbon (Europe) (En,Fr,De,Es,It).cue"
 
 extern uint32_t psx_read_word(uint32_t);
@@ -192,6 +193,8 @@ void wii_run_game(void)
     spu_init();
     wii_stage(6, "gpu/dma/mdec/timers/irq/sio/spu init done");
     cdrom_init(DISC_CUE);
+    /* GetID reports the inserted disc's licence region; this disc is PAL. */
+    cdrom_set_disc_scex("SCEE");
     wii_stage(7, "cdrom_init done");
     arm_text_guard();
 
