@@ -42,7 +42,10 @@ and cycle counts unchanged. Two opt-ins trade exactness for speed:
   code. The BIOS always stays cycle-exact.
 - `make FAST=1` walks GPU linked-list DMA lazily against a completion predicted
   at its start, instead of one device event per packet. A packet the CPU
-  rewrites after the DMA started is read late.
+  rewrites after the DMA started is read late. It also lets a device-register
+  read go without catching the devices up while no device event is due and they
+  are under 512 cycles behind, so a polled counter or status bit can read that
+  much late (the pad routine polls the SIO, timer 1 and I_STAT for every byte).
 
 In a course the two together run about 1.6x the default speed.
 

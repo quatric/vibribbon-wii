@@ -692,6 +692,32 @@ EXACT.append(("src/audio_trace.c",
      "    (void)tap; (void)stereo; (void)frames;\n"
      "    return;\n"
      "#endif\n"))
+# Opt-in (g_psx_mmio_read_slack, 0 = exact): a device-register read may skip
+# the catch-up while no device event is due yet and the devices are fewer than
+# that many cycles behind. Events and interrupts stay on their cycles; a polled
+# counter or status bit can read up to the slack late. Polling loops (the pad
+# routine waits on JOY_STAT, timer 1 and I_STAT for every byte) then catch the
+# devices up every slack cycles instead of on every iteration.
+EXACT.append(("src/psx_cycles.c",
+     "/* Exact per-charge path (legacy semantics).",
+     "uint32_t g_psx_mmio_read_slack = 0;\n"
+     "void psx_devices_mmio_sync_read(void) {\n"
+     "    if (g_psx_mmio_read_slack) {\n"
+     "        psx_cyc_batch_flush();\n"
+     "        if (!s_in_device_service && psx_next_service_cycle != 0 &&\n"
+     "            psx_cycle_count < psx_next_service_cycle &&\n"
+     "            psx_cycle_count - s_devices_synced_cycle < g_psx_mmio_read_slack)\n"
+     "            return;\n"
+     "    }\n"
+     "    psx_devices_mmio_sync();\n"
+     "}\n\n"
+     "/* Exact per-charge path (legacy semantics)."))
+for w, t in (("32", "uint32_t"), ("16", "uint16_t"), ("8", "uint8_t")):
+    EXACT.append(("src/memory.c",
+         f"static {t} mmio_read{w}(uint32_t addr) {{\n    psx_devices_mmio_sync();\n",
+         f"static {t} mmio_read{w}(uint32_t addr) {{\n"
+         "    extern void psx_devices_mmio_sync_read(void);\n"
+         "    psx_devices_mmio_sync_read();\n"))
 
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed

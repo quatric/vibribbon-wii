@@ -386,6 +386,10 @@ void wii_run_game(void)
          * (patch_runtime.py); not packet-exact if the CPU rewrites a list in flight */
         extern int g_dma_gpu_ll_fast;
         g_dma_gpu_ll_fast = 1;
+        /* and device-register reads may run up to 512 cycles ahead of the
+         * devices while no device event is due (polling loops) */
+        extern uint32_t g_psx_mmio_read_slack;
+        g_psx_mmio_read_slack = 512;
     }
 #endif
     wii_stage(8, "about to run scheduler");
