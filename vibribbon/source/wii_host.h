@@ -25,7 +25,7 @@ void wii_present(const uint16_t *vram_1024x512, int x, int y, int w, int h);
 /* SPU output (wii_audio.c): frames queued at 48 kHz, and cumulative stats. */
 void wii_audio_init(void);
 uint32_t wii_audio_queued(void);
-void wii_audio_stats(unsigned *underruns, unsigned *dropped, unsigned *render_ms);  /* render time since last call */
+void wii_audio_stats(unsigned *underruns, unsigned *dropped, unsigned *rendered);  /* SPU frames since last call */
 
 #ifdef __cplusplus
 }

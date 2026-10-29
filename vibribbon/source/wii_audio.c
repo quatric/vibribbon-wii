@@ -8,7 +8,6 @@
 #include <stdint.h>
 #include <string.h>
 #include <gccore.h>
-#include <ogc/lwp_watchdog.h>
 
 #include "spu.h"
 #include "wii_host.h"
@@ -19,7 +18,7 @@ extern void psx_set_midframe_audio_pump(void (*fn)(void));
 #define CYCLES_PER_FRAME 768u           /* 33.8688 MHz / 44100 Hz */
 #define DMA_FRAMES       256            /* 5.3 ms per DMA block at 48 kHz */
 #define RING_FRAMES      8192           /* power of two */
-#define RENDER_MAX       512
+#define RENDER_MAX       512             /* frames per spu_render call */
 
 static int16_t s_dma[2][DMA_FRAMES * 2] __attribute__((aligned(32)));
 static int s_dma_cur;
@@ -30,7 +29,11 @@ static volatile uint32_t s_wr, s_rd;
 static volatile unsigned s_underruns, s_dropped;
 static uint32_t s_last_out;
 
-static uint64_t s_last_cycles, s_carry, s_render_ticks;
+/* The SPU timeline: sample n is rendered once guest time reaches
+ * s_origin + (n + 1) * 768, s_rendered samples so far. */
+static uint64_t s_origin, s_rendered;
+static int s_started;
+static unsigned s_stat_frames;
 static uint32_t s_phase;                /* 16.16 position between s_prev and the next frame */
 static int16_t s_prev[2];
 #define STEP ((uint32_t)((44100ull << 16) / 48000u))
@@ -81,23 +84,29 @@ static void resample(const int16_t *in, int frames)
     }
 }
 
-static void pump(void)
+static void render_to(uint64_t now)
 {
     static int16_t buf[RENDER_MAX * 2];
-    uint64_t now = psx_get_cycle_count();
-    if (s_last_cycles == 0 || now < s_last_cycles) { s_last_cycles = now; return; }
-    uint64_t delta = now - s_last_cycles + s_carry;
-    s_last_cycles = now;
-    uint32_t frames = (uint32_t)(delta / CYCLES_PER_FRAME);
-    s_carry = delta % CYCLES_PER_FRAME;
-    uint64_t t0 = gettime();
+    if (!s_started) { s_origin = now; s_started = 1; return; }
+    if (now < s_origin) return;
+    uint64_t target = (now - s_origin) / CYCLES_PER_FRAME;
+    if (target <= s_rendered) return;
+    uint32_t frames = (uint32_t)(target - s_rendered);
+    s_rendered = target;
+    s_stat_frames += frames;
     while (frames) {
         int n = frames > RENDER_MAX ? RENDER_MAX : (int)frames;
         spu_render(buf, n);
         resample(buf, n);
         frames -= (uint32_t)n;
     }
-    s_render_ticks += gettime() - t0;
+}
+
+/* Called by the runtime at vblank and, while the SPU IRQ is enabled, at every
+ * sample boundary. */
+static void pump(void)
+{
+    render_to(psx_get_cycle_count());
 }
 
 uint32_t wii_audio_queued(void)
@@ -105,12 +114,12 @@ uint32_t wii_audio_queued(void)
     return s_wr - s_rd;
 }
 
-void wii_audio_stats(unsigned *underruns, unsigned *dropped, unsigned *render_ms)
+void wii_audio_stats(unsigned *underruns, unsigned *dropped, unsigned *rendered)
 {
     *underruns = s_underruns;
     *dropped = s_dropped;
-    *render_ms = (unsigned)ticks_to_millisecs(s_render_ticks);
-    s_render_ticks = 0;
+    *rendered = s_stat_frames;
+    s_stat_frames = 0;
 }
 
 void wii_audio_init(void)

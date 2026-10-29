@@ -45,10 +45,13 @@ void wii_video_init(void)
 }
 
 static FILE *s_logf;
+static mutex_t s_log_lock = LWP_MUTEX_NULL;   /* libfat is not thread-safe */
 
 void wii_log(const char *fmt, ...)
 {
     va_list ap;
+    if (s_log_lock == LWP_MUTEX_NULL) LWP_MutexInit(&s_log_lock, false);
+    LWP_MutexLock(s_log_lock);
     va_start(ap, fmt);
     vprintf(fmt, ap);
     va_end(ap);
@@ -60,13 +63,15 @@ void wii_log(const char *fmt, ...)
         fflush(s_logf);
         fsync(fileno(s_logf));
     }
+    LWP_MutexUnlock(s_log_lock);
 }
 
 /* Debug aid: write the current PS1 display rectangle as a binary PPM. */
 void wii_dump_ppm(const uint16_t *vram, int x, int y, int w, int h, const char *path)
 {
+    LWP_MutexLock(s_log_lock);
     FILE *f = fopen(path, "wb");
-    if (!f) return;
+    if (!f) { LWP_MutexUnlock(s_log_lock); return; }
     if (w > 1024) w = 1024;
     if (h > 512) h = 512;
     fprintf(f, "P6\n%d %d\n255\n", w, h);
@@ -78,6 +83,7 @@ void wii_dump_ppm(const uint16_t *vram, int x, int y, int w, int h, const char *
             fwrite(rgb, 1, 3, f);
         }
     fclose(f);
+    LWP_MutexUnlock(s_log_lock);
 }
 
 void wii_fatal(const char *fmt, ...)

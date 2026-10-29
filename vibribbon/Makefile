@@ -22,7 +22,7 @@ OBJ   := $(BUILD)/obj
 LIBOGC := /opt/devkitpro/libogc
 
 MACH := -mrvl -mcpu=750 -meabi -mhard-float
-DEFS := -DPSX_NO_DEBUG_TOOLS -DPSX_WII=1 -DPSX_NATIVE_BUILD=1 -DPSX_ENABLE_BLOCK_CYCLES=1 -DPSX_HAS_GAME_DISPATCH=1 $(if $(EXIT_SECONDS),-DVIB_EXIT_SECONDS=$(EXIT_SECONDS)) $(if $(STOP_AT),-DVIB_STOP_AT=$(STOP_AT)) $(if $(PROFILE),-DVIB_PROFILE=$(PROFILE)) $(if $(AUTOPLAY),-DVIB_AUTOPLAY=$(AUTOPLAY))
+DEFS := -DPSX_NO_DEBUG_TOOLS -DPSX_WII=1 -DPSX_NATIVE_BUILD=1 -DPSX_ENABLE_BLOCK_CYCLES=1 -DPSX_HAS_GAME_DISPATCH=1 $(if $(EXIT_SECONDS),-DVIB_EXIT_SECONDS=$(EXIT_SECONDS)) $(if $(STOP_AT),-DVIB_STOP_AT=$(STOP_AT)) $(if $(PROFILE),-DVIB_PROFILE=$(PROFILE)) $(if $(AUTOPLAY),-DVIB_AUTOPLAY=$(AUTOPLAY)) $(if $(AUTOPLAY_END),-DVIB_AUTOPLAY_END=$(AUTOPLAY_END))
 INC  := -Isource/shim -Isource -I$(RT)/include -I$(GEN)/main -I$(FW)/recompiler/src -I$(FW)/recompiler/lib/toml11 \
         -I$(BUILD)/libwiiinput/include -I$(LIBOGC)/include -I/opt/devkitpro/portlibs/ppc/include -I/opt/devkitpro/portlibs/wii/include
 OPT      ?= -O2
@@ -32,7 +32,7 @@ CXXFLAGS := $(CFLAGS) -std=gnu++17
 # Link-time optimisation over the runtime and host only (the generated code is
 # too large for it): lets device servicing and host stubs inline across files.
 LTO      ?= -flto
-LDFLAGS  := $(MACH) $(OPT) $(LTO) -Wl,--gc-sections -Wl,--wrap=psx_fatal_halt -Wl,--wrap=psx_crash_trace_dump -L$(BUILD)/libwiiinput/lib -L$(LIBOGC)/lib/wii -L/opt/devkitpro/portlibs/ppc/lib -L/opt/devkitpro/portlibs/wii/lib
+LDFLAGS  := $(MACH) $(OPT) $(LTO) -Wl,--gc-sections -Wl,--wrap=psx_fatal_halt -Wl,--wrap=psx_crash_trace_dump -Wl,--wrap=psx_idle_note_check -L$(BUILD)/libwiiinput/lib -L$(LIBOGC)/lib/wii -L/opt/devkitpro/portlibs/ppc/lib -L/opt/devkitpro/portlibs/wii/lib
 LIBS     := -linput-wii -lwiikeyboard -lfat -lz -lwiiuse -lbte -logc -lm
 
 RT_C := memory gpu gpu_sw_renderer gpu_render gpu_vram_dirty dma dma_gpu_ll timers \

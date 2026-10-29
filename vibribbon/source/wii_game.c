@@ -16,6 +16,7 @@
 #include "psx_bios_backend.h"
 #include "bios_hle.h"
 #include "cdrom.h"
+#include "spu.h"
 #include "psx_scheduler.h"
 #include "wii_host.h"
 #ifdef VIB_PROFILE
@@ -193,9 +194,13 @@ static void on_vblank(void)
     INPUT_Update();
     uint16_t pad = map_buttons(INPUT_PadsHeld());
 #ifdef VIB_AUTOPLAY
-    /* Debug aid for headless runs: from frame VIB_AUTOPLAY on, tap Start and
-     * then Cross every 300 frames to walk through the menus. */
-    if (frame >= VIB_AUTOPLAY) {
+    /* Debug aid for headless runs: from frame VIB_AUTOPLAY to VIB_AUTOPLAY_END,
+     * tap Start and then Cross every 300 frames to walk through the menus into
+     * the first course. It must stop there: Start pauses a course. */
+#ifndef VIB_AUTOPLAY_END
+#define VIB_AUTOPLAY_END (VIB_AUTOPLAY + 1660)
+#endif
+    if (frame >= VIB_AUTOPLAY && frame < VIB_AUTOPLAY_END) {
         unsigned k = (frame - VIB_AUTOPLAY) % 300;
         if (k < 6)                pad &= ~(1u << 3);    /* start */
         if (k >= 150 && k < 156)  pad &= ~(1u << 14);   /* cross */
@@ -209,7 +214,15 @@ static void on_vblank(void)
         wii_log("frame %u display %ux%u at (%u,%u) disabled=%d pc=%08X\n", frame,
                 di.width, di.height, di.display_x, di.display_y, di.disabled, s_cpu.pc);
 #ifdef VIB_EXIT_SECONDS
-    if (frame % 150 == 149) cd_dump();
+    if (frame % 150 == 149) {
+        cd_dump();
+        extern uint32_t i_mask;
+        SpuGlobalState g;
+        spu_get_global_state(&g);
+        wii_log("spu: ctrl %04X irq addr %05X flag %u mask %u reverb base %05X cur %05X capture %03X active %06X\n",
+                g.ctrl, (unsigned)g.irq_addr, g.irq_flag, (unsigned)((i_mask >> 9) & 1), (unsigned)g.reverb_mbase,
+                (unsigned)g.reverb_cur, (unsigned)g.capture_pos, (unsigned)g.active_mask);
+    }
 #endif
     if (frame % 300 == 299) {
         char name[64];
@@ -230,10 +243,13 @@ static void on_vblank(void)
                 (unsigned)(psx_get_cycle_count() / 1000000u),
                 cdrom_get_delivered_lba(), g_wii_iso_reads, g_wii_iso_fail, (unsigned)cdrom_get_burst_total());
         {
-            unsigned under, drop, render_ms;
-            wii_audio_stats(&under, &drop, &render_ms);
-            wii_log("audio: queued %u underruns %u dropped %u spu %u ms\n",
-                    (unsigned)wii_audio_queued(), under, drop, render_ms);
+            unsigned under, drop, rendered;
+            wii_audio_stats(&under, &drop, &rendered);
+            extern uint64_t g_vsync_skip_count, g_vsync_skip_cycles;
+            wii_log("audio: queued %u underruns %u dropped %u spu %u frames; vsync skips %llu (%lluM cycles)\n",
+                    (unsigned)wii_audio_queued(), under, drop, rendered,
+                    (unsigned long long)g_vsync_skip_count,
+                    (unsigned long long)(g_vsync_skip_cycles / 1000000u));
         }
         {
             extern void dirty_ram_text_exact_mismatch_stats(uint64_t *count, uint32_t out[5]);
@@ -354,7 +370,10 @@ void wii_run_game(void)
 #ifdef VIB_EXIT_SECONDS
     { lwp_t t; LWP_CreateThread(&t, watchdog, NULL, NULL, 8192, LWP_PRIO_HIGHEST); }
 #endif
-    g_idle_skip_enabled = 0;      /* as on desktop (game.toml leaves idle_skip off); costs ~6% per block edge */
+    /* The runtime's generic idle detector stays off, as on desktop (game.toml
+     * leaves idle_skip off); enabling it routes interrupt checks to the
+     * VSync wait skip in wii_idle.c instead. */
+    g_idle_skip_enabled = 1;
     wii_stage(8, "about to run scheduler");
     wii_log("executing from PC=0x%08X\n", s_cpu.pc);
 

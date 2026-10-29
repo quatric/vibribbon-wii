@@ -90,6 +90,63 @@ EXACT.append(("src/memory.c",
      "    text_ref_hi = phys_lo + len;\n"
      "}\n\n"
      "void dirty_ram_text_exact_mismatch_stats(uint64_t *count,"))
+# Text guard cache. Once a main program has been loaded its text pages stay
+# flagged (the clean baseline is only taken for the boot EXE), so every
+# dispatch into it memcmp'd the function's ranges against the reference. A page
+# whose full contents compared equal to the active reference is now remembered
+# as such until something could change it: a page or executable-range mark, a
+# guest write that differs from the reference, or a switch of reference image.
+# This is the same trust the guard already places in never-touched pages.
+EXACT.append(("src/memory.c",
+     "static inline void dirty_ram_mark_page(uint32_t phys) {\n    if (phys >= RAM_SIZE) return;\n"
+     "    uint32_t page = phys >> DIRTY_RAM_PAGE_SHIFT;\n    uint32_t bit = 1u << (page & 31u);\n",
+     "static uint32_t text_verified_bitmap[DIRTY_RAM_BITMAP_WORDS];\n\n"
+     "static inline void dirty_ram_mark_page(uint32_t phys) {\n    if (phys >= RAM_SIZE) return;\n"
+     "    uint32_t page = phys >> DIRTY_RAM_PAGE_SHIFT;\n    uint32_t bit = 1u << (page & 31u);\n"
+     "    text_verified_bitmap[page >> 5] &= ~bit;\n"))
+EXACT.append(("src/memory.c",
+     "    for (uint32_t page = first_page; page <= last_page; page++) {\n"
+     "        dirty_ram_bitmap[page >> 5] |= (1u << (page & 31u));\n    }\n    g_dirty_ram_code_gen++;",
+     "    for (uint32_t page = first_page; page <= last_page; page++) {\n"
+     "        dirty_ram_bitmap[page >> 5] |= (1u << (page & 31u));\n"
+     "        text_verified_bitmap[page >> 5] &= ~(1u << (page & 31u));\n    }\n    g_dirty_ram_code_gen++;"))
+EXACT.append(("src/memory.c",
+     "        uint32_t page = phys >> DIRTY_RAM_PAGE_SHIFT;\n        text_modified_bitmap[page >> 5] |= (1u << (page & 31u));\n    }\n}",
+     "        uint32_t page = phys >> DIRTY_RAM_PAGE_SHIFT;\n        text_modified_bitmap[page >> 5] |= (1u << (page & 31u));\n"
+     "        text_verified_bitmap[page >> 5] &= ~(1u << (page & 31u));\n    }\n}"))
+EXACT.append(("src/memory.c",
+     "    memset(text_modified_bitmap, 0, sizeof(text_modified_bitmap));\n    memset(text_diverged_bitmap, 0, sizeof(text_diverged_bitmap));\n",
+     "    memset(text_modified_bitmap, 0, sizeof(text_modified_bitmap));\n    memset(text_diverged_bitmap, 0, sizeof(text_diverged_bitmap));\n"
+     "    memset(text_verified_bitmap, 0, sizeof(text_verified_bitmap));\n"))
+EXACT.append(("src/memory.c",
+     "    text_ref_image = (uint8_t *)bytes;\n    text_ref_lo = phys_lo;\n    text_ref_hi = phys_lo + len;\n}\n",
+     "    text_ref_image = (uint8_t *)bytes;\n    text_ref_lo = phys_lo;\n    text_ref_hi = phys_lo + len;\n"
+     "    memset(text_verified_bitmap, 0, sizeof(text_verified_bitmap));\n}\n"))
+EXACT.append(("src/memory.c",
+     "    if (!(text_modified_bitmap[page >> 5] & bit) && !dirty_ram_is_dirty(phys))\n        return 1;\n",
+     "    if ((text_verified_bitmap[page >> 5] & bit) ||\n"
+     "        (!(text_modified_bitmap[page >> 5] & bit) && !dirty_ram_is_dirty(phys)))\n        return 1;\n"))
+EXACT.append(("src/memory.c",
+     "            for (p = p0; p <= p1; p++) {\n"
+     "                if ((text_modified_bitmap[p >> 5] & (1u << (p & 31u))) ||\n"
+     "                    dirty_ram_is_dirty(p << DIRTY_RAM_PAGE_SHIFT)) {",
+     "            for (p = p0; p <= p1; p++) {\n"
+     "                if (text_verified_bitmap[p >> 5] & (1u << (p & 31u))) continue;\n"
+     "                if ((text_modified_bitmap[p >> 5] & (1u << (p & 31u))) ||\n"
+     "                    dirty_ram_is_dirty(p << DIRTY_RAM_PAGE_SHIFT)) {"))
+EXACT.append(("src/memory.c",
+     "            g_text_native_blocked++;\n            return 0;\n        }\n    }\n    if (!any) {",
+     "            g_text_native_blocked++;\n            return 0;\n        }\n"
+     "        /* The range matched: try to verify its whole pages once. */\n"
+     "        for (uint32_t p = phys >> DIRTY_RAM_PAGE_SHIFT;\n"
+     "             p <= (phys + len - 1u) >> DIRTY_RAM_PAGE_SHIFT; p++) {\n"
+     "            uint32_t lo = p << DIRTY_RAM_PAGE_SHIFT, sz = 1u << DIRTY_RAM_PAGE_SHIFT;\n"
+     "            if ((text_verified_bitmap[p >> 5] & (1u << (p & 31u))) ||\n"
+     "                lo < text_ref_lo || lo + sz > text_ref_hi) continue;\n"
+     "            if (memcmp(ram + lo, text_ref_image + (lo - text_ref_lo), sz) == 0)\n"
+     "                text_verified_bitmap[p >> 5] |= 1u << (p & 31u);\n"
+     "        }\n    }\n    if (!any) {"))
+
 # Per-instruction timing helpers: at -Os GCC keeps these as separate calls, so
 # psx_cyc_step costs three or four nested calls per guest instruction. Force
 # them into their callers; each translation unit keeps one psx_cyc_step.
@@ -104,6 +161,50 @@ for fn in ("psx_cyc_charge(uint32_t cycles)", "psx_cyc_base(CPUState* cpu)",
 EXACT.append(("src/cdrom.c",
      "    if (cdrom_irq_mask_matches_reason(irq_enable, irq_flag)) {\n        int rem = irq_present_rem_cycles();",
      "    if (cdrom_irq_mask_matches_reason(irq_enable, irq_flag) && !cdrom_intc_request_latched) {\n        int rem = irq_present_rem_cycles();"))
+# SPU sample scheduler: while the SPU IRQ is enabled it runs at every 768-cycle
+# sample boundary and on every deadline recompute. It fetched the whole SPU
+# state (a memset plus two 24-voice loops) to test one control bit, and took
+# 64-bit modulos, the bulk of a course's runtime on the Wii. Same results.
+EXACT.append(("src/spu.c",
+     "void spu_get_global_state(SpuGlobalState* out) {",
+     "uint16_t spu_get_ctrl(void) { return spu_regs[reg_index(0x1F801DAAu)]; }\n\n"
+     "void spu_get_global_state(SpuGlobalState* out) {"))
+EXACT.append(("src/interrupts.c",
+     "uint32_t psx_spu_sample_event_cycles_to_next(void) {\n    SpuGlobalState state;\n",
+     "extern uint16_t spu_get_ctrl(void);\n"
+     "/* x % 768 without a 64-bit division: 2^32 = 256 (mod 768). */\n"
+     "static inline uint32_t cyc_mod768(uint64_t x) {\n"
+     "    return (((uint32_t)(x >> 32) % 3u) * 256u + (uint32_t)x % 768u) % 768u;\n}\n\n"
+     "uint32_t psx_spu_sample_event_cycles_to_next(void) {\n"))
+EXACT.append(("src/interrupts.c",
+     "    spu_get_global_state(&state);\n    if ((state.ctrl & 0x0040u) == 0) {\n        g_spu_sample_ctrl_rejects++;",
+     "    if ((spu_get_ctrl() & 0x0040u) == 0) {\n        g_spu_sample_ctrl_rejects++;"))
+EXACT.append(("src/interrupts.c",
+     "    const uint32_t phase = (uint32_t)(psx_get_cycle_count() % 768u);",
+     "    const uint32_t phase = cyc_mod768(psx_get_cycle_count());"))
+EXACT.append(("src/interrupts.c",
+     "    SpuGlobalState state;\n    spu_get_global_state(&state);\n    if ((state.ctrl & 0x0040u) != 0) {\n"
+     "        g_spu_sample_enabled_services++;\n        g_spu_sample_last_service_phase = (uint32_t)(psx_cycle_count % 768u);\n    }\n"
+     "    if ((psx_cycle_count % 768u) == 0) {\n        g_spu_sample_raw_boundaries++;\n"
+     "        if ((psx_get_cycle_count() % 768u) != 0)\n            g_spu_sample_deferred_mismatches++;\n    }\n"
+     "    if ((state.ctrl & 0x0040u) != 0 &&\n        (psx_get_cycle_count() % 768u) == 0) {",
+     "    const uint16_t spu_ctrl = spu_get_ctrl();\n    const uint32_t phase = cyc_mod768(psx_get_cycle_count());\n"
+     "    if ((spu_ctrl & 0x0040u) != 0) {\n"
+     "        g_spu_sample_enabled_services++;\n        g_spu_sample_last_service_phase = cyc_mod768(psx_cycle_count);\n    }\n"
+     "    if (cyc_mod768(psx_cycle_count) == 0) {\n        g_spu_sample_raw_boundaries++;\n"
+     "        if (phase != 0)\n            g_spu_sample_deferred_mismatches++;\n    }\n"
+     "    if ((spu_ctrl & 0x0040u) != 0 && phase == 0) {"))
+
+# SPU reverb work-area addresses: every term is below 2^20, so the int64
+# modulo (a libgcc call on the Wii, several per reverb step) can be 32-bit.
+EXACT.append(("src/spu.c",
+     "    int64_t  rel  = (int64_t)rev_cur - (int64_t)base\n"
+     "                  + ((int64_t)RREG(reg_addr) << 3) + (int64_t)bias;\n"
+     "    rel %= (int64_t)size;\n    if (rel < 0) rel += (int64_t)size;",
+     "    int32_t  rel  = (int32_t)rev_cur - (int32_t)base\n"
+     "                  + ((int32_t)RREG(reg_addr) << 3) + bias;\n"
+     "    rel %= (int32_t)size;\n    if (rel < 0) rel += (int32_t)size;"))
+
 for rel, old, new in EXACT:
     path = f"{root}/{rel}"
     text = open(path).read()
