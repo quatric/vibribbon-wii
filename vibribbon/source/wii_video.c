@@ -124,8 +124,10 @@ void wii_present(const uint16_t *vram, int x, int y, int w, int h)
     }
 
     /* The VI flips to the new XFB at the next retrace; with two buffers and a
-     * present every few frames there is no need to block on vsync here. */
-    uint32_t *dst = (uint32_t *)s_xfb[s_fb ^ 1];
+     * present every few frames there is no need to block on vsync here.
+     * The conversion writes through the cache and flushes once: uncached
+     * stores to the XFB are one bus write each. */
+    uint32_t *dst = (uint32_t *)MEM_K1_TO_K0(s_xfb[s_fb ^ 1]);
     for (int dy = 0; dy < dh; dy++) {
         const uint16_t *row = vram + (((y + (dy * h) / dh) & 511) << 10);
         uint32_t *out = dst + dy * dw;
@@ -137,6 +139,7 @@ void wii_present(const uint16_t *vram, int x, int y, int w, int h)
             out[dx] = ((a >> 16) << 24) | (cb << 16) | ((b >> 16) << 8) | cr;
         }
     }
+    DCStoreRange(dst, (u32)dh * dw * 4u);
     s_fb ^= 1;
     VIDEO_SetNextFramebuffer(s_xfb[s_fb]);
     VIDEO_Flush();

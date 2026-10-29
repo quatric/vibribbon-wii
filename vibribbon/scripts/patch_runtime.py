@@ -424,13 +424,44 @@ EXACT.append(("src/memory.c",
 # any SPU register or DMA access (g_spu_access_hook) and at its own pumps.
 EXACT.append(("src/spu.c",
      "static void spu_irq_check(uint32_t addr, uint32_t len) {\n",
-     "void (*g_spu_access_hook)(void);\n\n"
+     "void (*g_spu_access_hook)(void);\n"
+     "extern uint64_t psx_next_service_cycle, g_psx_cycle_fast_limit;\n"
+     "extern int psx_in_device_service;\n"
+     "extern uint32_t psx_spu_sample_event_cycles_to_next(void);\n"
+     "static int spu_bound_valid;            /* spu_irq_samples_lower_bound cache */\n"
+     "static void spu_deadline_after_write(void) {\n"
+     "    if (psx_in_device_service || psx_next_service_cycle == 0) return;  /* recomputed anyway */\n"
+     "    uint32_t d = psx_spu_sample_event_cycles_to_next();\n"
+     "    if (d == UINT32_MAX) return;\n"
+     "    uint64_t due = psx_get_cycle_count() + d;\n"
+     "    if (due < psx_next_service_cycle) { psx_next_service_cycle = due; g_psx_cycle_fast_limit = 0; }\n"
+     "}\n\n"
      "static void spu_irq_check(uint32_t addr, uint32_t len) {\n"))
-for sig in ("uint32_t spu_read(uint32_t addr) {\n",
-            "void spu_write(uint32_t addr, uint32_t value) {\n",
-            "void spu_dma_write(uint32_t word) {\n",
-            "uint32_t spu_dma_read(void) {\n"):
+# A write can bring the IRQ closer (new address, key-on, enable) than the
+# deadline taken at the MMIO sync: once it is done, pull the deadline in to
+# the SPU's. Nothing else moves, so devices are still serviced where they were.
+for sig in ("uint32_t spu_read(uint32_t addr) {\n", "uint32_t spu_dma_read(void) {\n"):
     EXACT.append(("src/spu.c", sig, sig + "    if (g_spu_access_hook) g_spu_access_hook();\n"))
+for ret, name, params, args in (("void", "spu_write", "uint32_t addr, uint32_t value", "addr, value"),
+                                ("void", "spu_dma_write", "uint32_t word", "word")):
+    sig = f"{ret} {name}({params}) {{\n"
+    EXACT.append(("src/spu.c", sig,
+         f"static {ret} {name}_body({params});\n"
+         f"{sig}"
+         "    if (g_spu_access_hook) g_spu_access_hook();\n"
+         f"    {name}_body({args});\n"
+         "    spu_bound_valid = 0;\n"
+         "    spu_deadline_after_write();\n"
+         "}\n"
+         f"static {ret} {name}_body({params}) {{\n"))
+# The bound depends only on SPU state, so it holds until a render, a write or
+# a state load changes that.
+for sig in ("void spu_init(void) {\n",
+            "int spu_snapshot_read(const uint8_t *p, uint32_t len) {\n",
+            "uint8_t*  spu_get_ram_ptr(void){ ",
+            "void spu_render(int16_t* out_stereo, int frames) {\n"):
+    EXACT.append(("src/spu.c", sig, sig + ("spu_bound_valid = 0; " if sig.endswith(" ")
+                                         else "    spu_bound_valid = 0;\n")))
 EXACT.append(("src/spu.c",
      "void spu_render(int16_t* out_stereo, int frames) {\n",
      "/* Samples from the next one to render (0) until the first that could raise\n"
@@ -442,7 +473,7 @@ EXACT.append(("src/spu.c",
      "static inline uint32_t spu_samples_until(int32_t need, uint32_t pitch) {\n"
      "    return need <= 0 ? 0u : ((uint32_t)need + pitch - 1u) / pitch;\n"
      "}\n"
-     "uint32_t spu_irq_samples_lower_bound(void) {\n"
+     "static uint32_t spu_irq_bound_compute(void) {\n"
      "    if (!(RREG(0x1F801DAAu) & 0x0040u) || irq_flag) return UINT32_MAX;\n"
      "    uint32_t target = RREG(0x1F801DA4u);\n"
      "    uint32_t best = UINT32_MAX;\n"
@@ -485,6 +516,11 @@ EXACT.append(("src/spu.c",
      "        if (j2 < best) best = j2;\n"
      "    }\n"
      "    return best;\n"
+     "}\n"
+     "uint32_t spu_irq_samples_lower_bound(void) {\n"
+     "    static uint32_t bound;\n"
+     "    if (!spu_bound_valid) { bound = spu_irq_bound_compute(); spu_bound_valid = 1; }\n"
+     "    return bound;\n"
      "}\n\n"
      "void spu_render(int16_t* out_stereo, int frames) {\n"))
 # CD input timing. A CD-DA sector lands in the SPU's CD FIFO at whatever
@@ -548,6 +584,47 @@ EXACT.append(("src/cdrom.c",
      "            spu_cd_audio_push(pcm, CDDA_SECTOR_FRAMES);\n"
      "            g_spu_cd_push_cycle = UINT64_MAX;\n"
      "        }\n"))
+# A host that renders a run of samples in one call (each would have been its
+# own pump) sets g_spu_render_step to the cycles per sample: every frame then
+# sees the CD input due by its own boundary.
+EXACT.append(("src/spu.c",
+     "static int cd_audio_pop(int16_t* left, int16_t* right) {\n",
+     "static int cd_audio_pop(int16_t* left, int16_t* right);\n"
+     "uint32_t g_spu_render_step;\n"
+     "static inline int cd_audio_pop_frame(int16_t* left, int16_t* right) {\n"
+     "    int got = cd_audio_pop(left, right);\n"
+     "    g_spu_render_cycle += g_spu_render_step;\n"
+     "    return got;\n"
+     "}\n\n"
+     "static int cd_audio_pop(int16_t* left, int16_t* right) {\n"))
+PATCHES.append(("src/spu.c", r"if \(cd_audio_pop\(&cd_l, &cd_r\)\) \{", "if (cd_audio_pop_frame(&cd_l, &cd_r)) {"))
+# Fill rectangles: a row that doesn't wrap is filled two pixels per store.
+EXACT.append(("src/gpu_sw_renderer.c",
+     "    for (int row = 0; row < h; row++) {\n"
+     "        int py = (y0 + row) & (VRAM_HEIGHT - 1);\n"
+     "        for (int col = 0; col < w; col++) {\n"
+     "            int px = (x0 + col) & (VRAM_WIDTH - 1);\n"
+     "            g_vram[py * VRAM_WIDTH + px] = color;\n"
+     "        }\n"
+     "    }\n"
+     "    gpu_vram_dirty_mark_rect(x0, y0, w, h);\n",
+     "    uint32_t pair = ((uint32_t)color << 16) | color;\n"
+     "    for (int row = 0; row < h; row++) {\n"
+     "        int py = (y0 + row) & (VRAM_HEIGHT - 1);\n"
+     "        if (x0 + w <= VRAM_WIDTH) {\n"
+     "            uint16_t *d = &g_vram[py * VRAM_WIDTH + x0], *e = d + w;\n"
+     "            if (((uintptr_t)d & 2u) && d < e) *d++ = color;\n"
+     "            typedef uint32_t __attribute__((may_alias)) u32a;\n"
+     "            for (; d + 2 <= e; d += 2) *(u32a *)d = pair;\n"
+     "            if (d < e) *d = color;\n"
+     "            continue;\n"
+     "        }\n"
+     "        for (int col = 0; col < w; col++) {\n"
+     "            int px = (x0 + col) & (VRAM_WIDTH - 1);\n"
+     "            g_vram[py * VRAM_WIDTH + px] = color;\n"
+     "        }\n"
+     "    }\n"
+     "    gpu_vram_dirty_mark_rect(x0, y0, w, h);\n"))
 
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed

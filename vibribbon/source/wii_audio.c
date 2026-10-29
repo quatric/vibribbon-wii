@@ -19,6 +19,7 @@ extern void (*g_spu_access_hook)(void);
 extern uint16_t spu_get_ctrl(void);
 extern int psx_in_device_service;
 extern uint64_t g_spu_render_cycle;
+extern uint32_t g_spu_render_step;
 
 #define CYCLES_PER_FRAME 768u           /* 33.8688 MHz / 44100 Hz */
 #define DMA_FRAMES       256            /* 5.3 ms per DMA block at 48 kHz */
@@ -138,14 +139,36 @@ static uint64_t sample_due(uint32_t ahead)
     return done + (s_origin_mod ? CYCLES_PER_FRAME - s_origin_mod : 0u);
 }
 
+/* The pumps at boundaries b + 768, ..., b + n * 768 after one at b: each
+ * renders one sample, so they render as one run, with the SPU stepping the
+ * guest time its CD input sees by a sample per frame. */
+static void render_run(uint64_t b, uint32_t n)
+{
+    static int16_t buf[RENDER_MAX * 2];
+    s_rendered += n;
+    s_stat_frames += n;
+    g_spu_render_cycle = b + CYCLES_PER_FRAME;
+    g_spu_render_step = CYCLES_PER_FRAME;
+    while (n) {
+        int k = n > RENDER_MAX ? RENDER_MAX : (int)n;
+        spu_render(buf, k);
+        resample(buf, k);
+        n -= (uint32_t)k;
+    }
+    g_spu_render_step = 0;
+}
+
 static void pump_boundaries(uint64_t t)
 {
     if (s_started && (spu_get_ctrl() & 0x0040u)) {
         uint64_t b = sample_due(0);
         uint64_t first = s_pumped + CYCLES_PER_FRAME - (uint32_t)(s_pumped % CYCLES_PER_FRAME);
         if (b < first) b = first;
-        for (; b <= t; b += CYCLES_PER_FRAME)
+        if (b <= t) {
             render_to(b);
+            if (b >= s_origin)
+                render_run(b, (uint32_t)((t - b) / CYCLES_PER_FRAME));
+        }
     }
     if (t > s_pumped) s_pumped = t;
 }
