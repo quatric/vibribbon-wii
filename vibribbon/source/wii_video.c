@@ -116,6 +116,16 @@ void wii_present(const uint16_t *vram, int x, int y, int w, int h)
     static int map_x = -1, map_w = -1;
     if (w <= 0 || h <= 0) return;
 
+    /* A display 320 to 640 pixels wide goes into an XFB of the same width and
+     * the VI scales it to the screen; others are scaled here. */
+    static int full_w;
+    if (!full_w) full_w = s_rmode->fbWidth;
+    int want_w = (w >= 320 && w <= full_w && w % 16 == 0 && x + w <= 1024) ? w : full_w;
+    if (want_w != s_rmode->fbWidth) {
+        s_rmode->fbWidth = want_w;
+        VIDEO_Configure(s_rmode);
+        map_w = -1;
+    }
     const int fw = s_rmode->fbWidth, dw = fw / 2, dh = s_rmode->xfbHeight;
     if (x != map_x || w != map_w) {
         for (int dx = 0; dx < fw && dx < 720; dx++)
@@ -138,6 +148,17 @@ void wii_present(const uint16_t *vram, int x, int y, int w, int h)
         }
         prev_sy = sy;
         const uint16_t *row = vram + (sy << 10);
+        if (fw == w) {                       /* one PS1 pixel per XFB pixel */
+            const uint16_t *src = row + x;
+            for (int dx = 0; dx < dw; dx++) {
+                uint32_t a = s_ycbcr_lut[src[dx * 2] & 0x7FFF];
+                uint32_t b = s_ycbcr_lut[src[dx * 2 + 1] & 0x7FFF];
+                uint32_t cb = (((a >> 8) & 0xFF) + ((b >> 8) & 0xFF)) >> 1;
+                uint32_t cr = ((a & 0xFF) + (b & 0xFF)) >> 1;
+                out[dx] = ((a >> 16) << 24) | (cb << 16) | ((b >> 16) << 8) | cr;
+            }
+            continue;
+        }
         for (int dx = 0; dx < dw; dx++) {
             uint32_t a = s_ycbcr_lut[row[sx_map[dx * 2]] & 0x7FFF];
             uint32_t b = s_ycbcr_lut[row[sx_map[dx * 2 + 1]] & 0x7FFF];
