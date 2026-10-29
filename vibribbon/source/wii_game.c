@@ -2,6 +2,7 @@
  * the desktop host (runtime/src/main.cpp), minus SDL/GL/netplay/launcher. */
 #include <stdio.h>
 #include <stdlib.h>
+#include <malloc.h>
 #include <string.h>
 #include <unistd.h>
 #include <gccore.h>
@@ -160,6 +161,15 @@ static void on_vblank(void)
     }
 }
 
+#define GUEST_STACK_SIZE (1024 * 1024)
+
+static void *guest_thread(void *arg)
+{
+    (void)arg;
+    psx_scheduler_run(&s_cpu);
+    return NULL;
+}
+
 void wii_run_game(void)
 {
     wii_log("Vib-Ribbon (recompiled) starting\n");
@@ -167,8 +177,11 @@ void wii_run_game(void)
     INPUT_Init();
     wii_stage(3, "libwiiinput up");
 
-    if (!psx_bios_bundled() || !psx_bios_activate(psx_bios_bundled()))
-        wii_fatal("no bundled BIOS backend");
+    /* gen.sh registers exactly one BIOS: the user's SCPH-5552 or OpenBIOS. */
+    if (psx_bios_registry_count < 1 || !psx_bios_activate(psx_bios_registry[0]))
+        wii_fatal("no BIOS backend linked");
+    wii_log("bios: %s\n", psx_bios_image.image_id ? psx_bios_image.image_id : "?");
+    psx_bios_hle_configure(0, 1);   /* skip the BIOS shell intro, as the desktop's fast boot does */
 #ifdef VIB_EXIT_SECONDS
     s_real_hook = g_psx_bios_hle_hook;
     g_psx_bios_hle_hook = trace_hook;
@@ -213,7 +226,15 @@ void wii_run_game(void)
     g_idle_skip_enabled = 1;      /* skip spin-waits for vblank instead of burning cycles */
     wii_stage(8, "about to run scheduler");
     wii_log("executing from PC=0x%08X\n", s_cpu.pc);
-    psx_scheduler_run(&s_cpu);
+
+    /* The runtime was written for desktop stacks: some CD/overlay paths keep
+     * 64-128 KB buffers on the stack, more than libogc's whole 128 KB main
+     * stack. Run the guest on its own thread with room to spare. */
+    void *stack = memalign(32, GUEST_STACK_SIZE);
+    lwp_t guest;
+    if (!stack || LWP_CreateThread(&guest, guest_thread, NULL, stack, GUEST_STACK_SIZE, 64) != 0)
+        wii_fatal("could not start the guest thread");
+    LWP_JoinThread(guest, NULL);
 
     wii_fatal("guest exited");
 }

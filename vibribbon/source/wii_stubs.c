@@ -42,6 +42,7 @@ uint32_t g_present_slow_count;
 
 /* ---- debug server ---- */
 void debug_server_poll(void) {}
+void debug_server_log_probe(uint32_t pc, CPUState *cpu) { (void)pc; (void)cpu; }
 void debug_server_trace_write_check(uint32_t phys, uint32_t old_val, uint32_t new_val, uint8_t width)
 { (void)phys; (void)old_val; (void)new_val; (void)width; }
 void debug_server_trace_mmio_write(uint32_t a, uint32_t v, uint8_t w) { (void)a; (void)v; (void)w; }
@@ -142,11 +143,21 @@ void *psx_overlay_posix_library_entry(void *h, uint32_t e) { (void)h; (void)e; r
 void psx_overlay_posix_library_close(void *h) { (void)h; }
 
 /* Host fibers back only the legacy LLE scheduler; the HLE TCB scheduler is the
- * default and is what runs here. */
-#include <stdlib.h>
+ * default and is what runs here, on a single host fiber. The exception path
+ * still asks which fiber owns its setjmp buffer, so that one fiber needs an
+ * identity. (abort() is not an option: on libogc it jumps to a loader stub
+ * that may not exist.) */
 typedef void *psx_fiber_t;
-psx_fiber_t psx_fiber_current(void) { abort(); }
-void psx_fiber_switch(psx_fiber_t t) { (void)t; abort(); }
-psx_fiber_t psx_fiber_create(size_t sz, void (*entry)(void *), void *arg) { (void)sz; (void)entry; (void)arg; abort(); }
+static char s_only_fiber;
+psx_fiber_t psx_fiber_current(void) { return &s_only_fiber; }
+psx_fiber_t psx_fiber_convert_thread(void) { return &s_only_fiber; }
+void psx_fiber_switch(psx_fiber_t t)
+{
+    if (t != &s_only_fiber) wii_fatal("fiber switch requested (only one host fiber on Wii)");
+}
+psx_fiber_t psx_fiber_create(size_t sz, void (*entry)(void *), void *arg)
+{
+    (void)sz; (void)entry; (void)arg;
+    wii_fatal("fiber create requested (only one host fiber on Wii)");
+}
 void psx_fiber_destroy(psx_fiber_t f) { (void)f; }
-psx_fiber_t psx_fiber_convert_thread(void) { abort(); }
