@@ -27,6 +27,14 @@ the second argument; it must be 524288 bytes with SHA-256
 `1faaa18fa820a0225e488d9f086296b8e6c46df739666093987ff7d8fd352c09`. Without it
 the build falls back to OpenBIOS (MIT licensed), which does not start this disc.
 
+### Timing mode
+
+By default the recompiled code charges cycles per instruction, the framework's
+cycle-exact timing model. `VIB_BLOCK_CYCLES=1 scripts/gen.sh ...` charges each
+basic block up front instead: about 25% faster on the Wii and 2 MB smaller, but
+instruction-cache and mid-block multiply/divide/GTE stall timing are no longer
+exact. The BIOS always stays cycle-exact.
+
 ## SD card layout
 
 ```
@@ -59,7 +67,8 @@ in, into `prof.bin` (pc, lr and guest pc per sample, big-endian).
 ## Status
 
 Boots with the SCPH-5552 BIOS and runs through the NanaOn-Sha logo and the intro
-to the title screen in Dolphin, at about 8 frames per second (the PS1 runs at 50).
+to the title screen in Dolphin, at about 9 frames per second (the PS1 runs at 50)
+in the default cycle-exact mode.
 Not yet playable.
 
 Done:
@@ -74,8 +83,9 @@ Done:
   libogc, runtime stubs. The guest runs on its own thread with a 1 MB stack.
 
 Not done:
-- Speed. Most time goes to the runtime's cycle-exact timing model (per-dispatch
-  interrupt checks, device servicing and timed loads), not to the game code.
+- Speed. Most time goes to the runtime's cycle-exact timing model (the
+  per-instruction step, timed loads, interrupt checks and device servicing), not
+  to the game code. Inlining the step everywhere would not fit in MEM1.
 - Frame pacing for when the emulation runs faster than real time.
 - Audio output (SPU to the Wii audio interface).
 - Reading CD audio tracks from a USB drive (the original's level generation),

@@ -133,10 +133,17 @@ static uint16_t map_buttons(uint32_t held)
     return b;
 }
 
+#ifdef VIB_PROFILE
+static void profile_flush(void);
+#endif
+
 static void on_vblank(void)
 {
     static unsigned frame;
     frame++;
+#ifdef VIB_PROFILE
+    profile_flush();
+#endif
     s_frames = frame;
     if (frame == 1)   wii_stage(9,  "first vblank");
     if (frame == 10)  wii_stage(10, "10 vblanks");
@@ -189,6 +196,7 @@ static void on_vblank(void)
 static KThread *volatile s_guest_kthread;
 #define PROF_SAMPLES 16384
 static uint32_t s_prof[PROF_SAMPLES][3];
+static volatile unsigned s_prof_done, s_prof_idle;
 
 static void *profiler(void *arg)
 {
@@ -206,10 +214,19 @@ static void *profiler(void *arg)
         s_prof[n][2] = s_cpu.pc;
         n++;
     }
-    FILE *f = fopen(APP_DIR "prof.bin", "wb");
-    if (f) { fwrite(s_prof, sizeof(s_prof[0]), n, f); fclose(f); }
-    wii_log("profile: %u samples written, %u idle\n", n, idle);
+    s_prof_idle = idle;
+    s_prof_done = n;          /* the guest thread writes the file: libfat is not thread-safe */
     return NULL;
+}
+
+static void profile_flush(void)
+{
+    static int written;
+    if (!s_prof_done || written) return;
+    written = 1;
+    FILE *f = fopen(APP_DIR "prof.bin", "wb");
+    if (f) { fwrite(s_prof, sizeof(s_prof[0]), s_prof_done, f); fclose(f); }
+    wii_log("profile: %u samples written, %u idle\n", s_prof_done, s_prof_idle);
 }
 #endif
 
@@ -276,7 +293,7 @@ void wii_run_game(void)
 #ifdef VIB_EXIT_SECONDS
     { lwp_t t; LWP_CreateThread(&t, watchdog, NULL, NULL, 8192, LWP_PRIO_HIGHEST); }
 #endif
-    g_idle_skip_enabled = 1;      /* skip spin-waits for vblank instead of burning cycles */
+    g_idle_skip_enabled = 0;      /* as on desktop (game.toml leaves idle_skip off); costs ~6% per block edge */
     wii_stage(8, "about to run scheduler");
     wii_log("executing from PC=0x%08X\n", s_cpu.pc);
 

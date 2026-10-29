@@ -49,6 +49,13 @@ fi
 python3 -I "$ROOT/tools/vibpak.py" "$BIN" extract "$EXTRACT" >/dev/null
 
 R="$FW/recompiler/build/psxrecomp-game"
+# Timing: by default every instruction charges its own cycles (the framework's
+# cycle-exact model). VIB_BLOCK_CYCLES=1 charges each basic block up front
+# instead: much faster on the Wii, but instruction-cache and mid-block
+# multiply/divide/GTE stall timing are no longer exact.
+if [ "${VIB_BLOCK_CYCLES:-0}" = 1 ]; then
+    export PSX_CODEGEN_CYCLE_PER_INSN=0
+fi
 "$R" "$EXTRACT/SCES_028.73" --project-root "$FW" --seeds "$GAME/seeds/ghidra_funcs.txt" --out-dir "$GEN/boot" --strict >/dev/null
 "$R" "$EXTRACT/MAIN_G.EXE" --project-root "$FW" --out-dir "$GEN/main" --strict >/dev/null
 "$R" "$EXTRACT/MAIN_T.EXE" --project-root "$FW" --out-dir "$GEN/title" --strict >/dev/null
@@ -70,7 +77,7 @@ else
     BIOS_STEM=OpenBIOS
     BIOS_ROM="$FW/bios/openbios.bin"
 fi
-(cd "$FW" && bash tools/regen_bios.sh --config "bios/$BIOS_STEM.toml" >/dev/null)
+(cd "$FW" && env -u PSX_CODEGEN_CYCLE_PER_INSN bash tools/regen_bios.sh --config "bios/$BIOS_STEM.toml" >/dev/null)
 rm -f "$GEN"/bios/*.c
 mkdir -p "$GEN/bios"
 cp "$FW"/generated/"$BIOS_STEM"_*.c "$GEN/bios/"

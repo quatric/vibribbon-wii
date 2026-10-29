@@ -90,6 +90,13 @@ EXACT.append(("src/memory.c",
      "    text_ref_hi = phys_lo + len;\n"
      "}\n\n"
      "void dirty_ram_text_exact_mismatch_stats(uint64_t *count,"))
+# Per-instruction timing helpers: at -Os GCC keeps these as separate calls, so
+# psx_cyc_step costs three or four nested calls per guest instruction. Force
+# them into their callers; each translation unit keeps one psx_cyc_step.
+for fn in ("psx_cyc_charge(uint32_t cycles)", "psx_cyc_base(CPUState* cpu)",
+           "psx_cyc_deps(CPUState* cpu, uint32_t reg_mask)", "psx_cyc_lds(CPUState* cpu)"):
+    EXACT.append(("include/psx_cyc.h", f"static inline void {fn} {{",
+                  f"static inline __attribute__((always_inline)) void {fn} {{"))
 for rel, old, new in EXACT:
     path = f"{root}/{rel}"
     text = open(path).read()
