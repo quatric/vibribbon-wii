@@ -672,6 +672,26 @@ EXACT.append(("src/fntrace.c",
      "        }\n"
      "    }\n"
      "#endif\n"))
+# The card-capture probe is called on every RAM store and almost never armed:
+# test its flag inline.
+EXACT.append(("src/card_data_writes.c",
+     "static volatile int      s_armed = 0;\n",
+     "volatile int g_card_data_writes_armed = 0;\n"
+     "#define s_armed g_card_data_writes_armed\n"))
+EXACT.append(("src/memory.c",
+     "extern int card_data_writes_check(uint32_t phys, uint32_t value, uint8_t width);\n",
+     "extern int card_data_writes_check(uint32_t phys, uint32_t value, uint8_t width);\n"
+     "extern volatile int g_card_data_writes_armed;\n"
+     "#define card_data_writes_check(p, v, w) \\\n"
+     "    (g_card_data_writes_armed ? card_data_writes_check(p, v, w) : 0)\n"))
+# PCM debug taps record every rendered sample; nothing reads them on the Wii.
+EXACT.append(("src/audio_trace.c",
+     "void audio_trace_pcm(int tap, const int16_t *stereo, int frames)\n{\n",
+     "void audio_trace_pcm(int tap, const int16_t *stereo, int frames)\n{\n"
+     "#ifdef PSX_WII\n"
+     "    (void)tap; (void)stereo; (void)frames;\n"
+     "    return;\n"
+     "#endif\n"))
 
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed

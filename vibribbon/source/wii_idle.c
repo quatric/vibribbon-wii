@@ -20,6 +20,7 @@
  * then takes the interrupt at the same check, on the same cycle, as running
  * every iteration would. */
 #include <stdint.h>
+#include <string.h>
 #include "cpu_state.h"
 #include "psx_cycles.h"
 
@@ -45,14 +46,15 @@ uint64_t g_vsync_skip_count, g_vsync_skip_cycles;
 
 static inline uint32_t ram_word(const uint8_t *ram, uint32_t addr)
 {
-    const uint8_t *p = ram + (addr & 0x1FFFFCu);
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    uint32_t w;
+    memcpy(&w, ram + (addr & 0x1FFFFCu), 4);
+    return __builtin_bswap32(w);                       /* lwbrx */
 }
 
 static inline void ram_store(uint8_t *ram, uint32_t addr, uint32_t v)
 {
-    uint8_t *p = ram + (addr & 0x1FFFFCu);
-    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+    v = __builtin_bswap32(v);
+    memcpy(ram + (addr & 0x1FFFFCu), &v, 4);
 }
 
 static int is_v_wait_loop(const uint8_t *ram, uint32_t pc)
