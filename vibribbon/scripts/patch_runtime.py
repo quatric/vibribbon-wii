@@ -794,6 +794,27 @@ EXACT.append(("src/fntrace.c",
      "#ifndef PSX_WII                         /* no string translation on the Wii */\n"
      "    text_xlate_on_dispatch(cpu, target);\n"
      "#endif\n"))
+# Debug rings only the debug server reads: SIO events (the starvation ring
+# is compiled out under PSX_NO_DEBUG_TOOLS but SIO still fed it) and BIOS
+# vector calls (each also read two guest words for the thread).
+EXACT.append(("src/sio.c",
+     "static void sr_record(uint8_t kind, uint8_t tx, uint8_t rx) {\n",
+     "static void sr_record(uint8_t kind, uint8_t tx, uint8_t rx) {\n"
+     "#ifdef PSX_WII\n"
+     "    (void)kind; (void)tx; (void)rx;\n"
+     "    return;\n"
+     "#endif\n"))
+EXACT.append(("src/bios_hle.c",
+     "static void hle_record(uint32_t vector, uint32_t fn, const CPUState* cpu,\n"
+     "                       uint32_t v0, uint8_t route)\n"
+     "{\n",
+     "static void hle_record(uint32_t vector, uint32_t fn, const CPUState* cpu,\n"
+     "                       uint32_t v0, uint8_t route)\n"
+     "{\n"
+     "#ifdef PSX_WII\n"
+     "    (void)vector; (void)fn; (void)cpu; (void)v0; (void)route;\n"
+     "    return;\n"
+     "#endif\n"))
 
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed
