@@ -37,7 +37,9 @@ and cycle counts unchanged. Two opt-ins trade exactness for speed:
 
 - `VIB_BLOCK_CYCLES=1 scripts/gen.sh ...` charges each basic block up front:
   instruction-cache and mid-block multiply/divide/GTE stall timing are no longer
-  exact. The BIOS always stays cycle-exact.
+  exact. It also takes interrupts at backward branches, calls and returns only
+  (`scripts/irq_backedges.py`), so one can wait out a run of straight-line
+  code. The BIOS always stays cycle-exact.
 - `make FAST=1` walks GPU linked-list DMA lazily against a completion predicted
   at its start, instead of one device event per packet. A packet the CPU
   rewrites after the DMA started is read late.
