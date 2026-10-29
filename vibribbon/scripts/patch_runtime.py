@@ -88,6 +88,7 @@ EXACT.append(("src/memory.c",
      "    text_ref_image = (uint8_t *)bytes;\n"
      "    text_ref_lo = phys_lo;\n"
      "    text_ref_hi = phys_lo + len;\n"
+     "    memset(text_verified_bitmap, 0, sizeof(text_verified_bitmap));\n"
      "}\n\n"
      "void dirty_ram_text_exact_mismatch_stats(uint64_t *count,"))
 # Text guard cache. Once a main program has been loaded its text pages stay
@@ -128,10 +129,6 @@ EXACT.append(("src/memory.c",
      "    memset(text_modified_bitmap, 0, sizeof(text_modified_bitmap));\n    memset(text_diverged_bitmap, 0, sizeof(text_diverged_bitmap));\n",
      "    memset(text_modified_bitmap, 0, sizeof(text_modified_bitmap));\n    memset(text_diverged_bitmap, 0, sizeof(text_diverged_bitmap));\n"
      "    memset(text_verified_bitmap, 0, sizeof(text_verified_bitmap));\n"))
-EXACT.append(("src/memory.c",
-     "    text_ref_image = (uint8_t *)bytes;\n    text_ref_lo = phys_lo;\n    text_ref_hi = phys_lo + len;\n}\n",
-     "    text_ref_image = (uint8_t *)bytes;\n    text_ref_lo = phys_lo;\n    text_ref_hi = phys_lo + len;\n"
-     "    memset(text_verified_bitmap, 0, sizeof(text_verified_bitmap));\n}\n"))
 EXACT.append(("src/memory.c",
      "    if (!(text_modified_bitmap[page >> 5] & bit) && !dirty_ram_is_dirty(phys))\n        return 1;\n",
      "    if (!(text_modified_bitmap[page >> 5] & bit) && !dirty_ram_is_dirty(phys))\n        return 1;\n"
@@ -208,6 +205,79 @@ EXACT.append(("src/spu.c",
      "    int32_t  rel  = (int32_t)rev_cur - (int32_t)base\n"
      "                  + ((int32_t)RREG(reg_addr) << 3) + bias;\n"
      "    rel %= (int32_t)size;\n    if (rel < 0) rel += (int32_t)size;"))
+
+# Opt-in fast GPU linked-list DMA (g_dma_gpu_ll_fast, off by default). The
+# faithful model takes a device event per packet header and payload, a full
+# device pass each, thousands per frame for a scene of line primitives. Fast
+# mode predicts the completion when the list starts, advertises only that,
+# and walks the packets lazily up to the current cycle whenever the DMA is
+# advanced, so register and GPU reads still see the same progress. The cost:
+# a packet the CPU rewrites after the DMA started is read when the walk gets
+# there rather than at its own cycle, and a list the CPU shortens completes
+# late. If a list outlives its prediction it is predicted again.
+EXACT.append(("include/dma_gpu_ll.h",
+     "    uint32_t empty_rank;\n} DMAGPULinkedList;",
+     "    uint32_t empty_rank;\n    uint32_t fast_left;      /* fast mode: predicted cycles to completion */\n} DMAGPULinkedList;"))
+EXACT.append(("include/dma_gpu_ll.h",
+     "void dma_gpu_ll_cancel(DMAGPULinkedList *state);\n",
+     "void dma_gpu_ll_cancel(DMAGPULinkedList *state);\n"
+     "extern int g_dma_gpu_ll_fast;\n"
+     "void dma_gpu_ll_predict(DMAGPULinkedList *state, const DMAGPULinkedListOps *ops, void *opaque);\n"))
+EXACT.append(("src/dma_gpu_ll.c",
+     "uint32_t dma_gpu_ll_cycles_to_event(const DMAGPULinkedList *state) {\n    if (!state->active) return UINT32_MAX;\n",
+     "int g_dma_gpu_ll_fast;\n\n"
+     "void dma_gpu_ll_predict(DMAGPULinkedList *s, const DMAGPULinkedListOps *ops, void *opaque) {\n"
+     "    s->fast_left = 0;\n"
+     "    if (!g_dma_gpu_ll_fast || !s->active || !ops || !ops->read_word) return;\n"
+     "    uint64_t total = 0;\n"
+     "    uint32_t phase = s->phase, cur = s->current_addr, next = s->next_addr;\n"
+     "    uint32_t wc = s->word_count, n = s->nodes_processed, rem = s->cycles_remaining;\n"
+     "    for (uint32_t guard = 0; guard < 0x80000u; guard++) {\n"
+     "        total += rem ? rem : 1u;\n"
+     "        if (phase == DMA_GPU_LL_PHASE_HEADER) {\n"
+     "            if (n >= s->max_nodes) break;\n"
+     "            cur = resolve_address(ops, opaque, cur);\n"
+     "            uint32_t header = ops->read_word(opaque, cur);\n"
+     "            wc = header >> 24; next = header & 0x00FFFFFFu; n++;\n"
+     "            if (wc != 0) { phase = DMA_GPU_LL_PHASE_PAYLOAD; rem = DMA_GPU_LL_SETUP_CYCLES; continue; }\n"
+     "            if (next == 0x00FFFFFFu) break;\n"
+     "            cur = resolve_address(ops, opaque, next); rem = DMA_GPU_LL_HEADER_CYCLES; continue;\n"
+     "        }\n"
+     "        if (phase == DMA_GPU_LL_PHASE_PAYLOAD) {\n"
+     "            if (next == 0x00FFFFFFu) { phase = DMA_GPU_LL_PHASE_COMPLETE; rem = wc; continue; }\n"
+     "            phase = DMA_GPU_LL_PHASE_HEADER; cur = resolve_address(ops, opaque, next);\n"
+     "            rem = wc + DMA_GPU_LL_HEADER_CYCLES; continue;\n"
+     "        }\n"
+     "        break;\n"
+     "    }\n"
+     "    s->fast_left = total > 0x7FFFFFFFu ? 0x7FFFFFFFu : (uint32_t)total;\n"
+     "}\n\n"
+     "uint32_t dma_gpu_ll_cycles_to_event(const DMAGPULinkedList *state) {\n    if (!state->active) return UINT32_MAX;\n"
+     "    if (state->fast_left) return state->fast_left;\n"))
+EXACT.append(("src/dma_gpu_ll.c",
+     "void dma_gpu_ll_advance(DMAGPULinkedList *state, uint32_t cycles,\n                        const DMAGPULinkedListOps *ops, void *opaque) {\n"
+     "    if (!state->active || cycles == 0 || !ops || !ops->read_word) return;",
+     "static void ll_advance_one(DMAGPULinkedList *state, uint32_t cycles,\n"
+     "                           const DMAGPULinkedListOps *ops, void *opaque);\n\n"
+     "void dma_gpu_ll_advance(DMAGPULinkedList *state, uint32_t cycles,\n                        const DMAGPULinkedListOps *ops, void *opaque) {\n"
+     "    if (!state->fast_left) { ll_advance_one(state, cycles, ops, opaque); return; }\n"
+     "    if (!state->active || cycles == 0 || !ops || !ops->read_word) return;\n"
+     "    state->fast_left = state->fast_left > cycles ? state->fast_left - cycles : 0u;\n"
+     "    while (state->active && cycles >= (state->cycles_remaining ? state->cycles_remaining : 1u)) {\n"
+     "        uint32_t step = state->cycles_remaining ? state->cycles_remaining : 1u;\n"
+     "        cycles -= step;\n"
+     "        ll_advance_one(state, step, ops, opaque);\n"
+     "    }\n"
+     "    if (state->active && cycles) ll_advance_one(state, cycles, ops, opaque);\n"
+     "    if (state->active && !state->fast_left) dma_gpu_ll_predict(state, ops, opaque);\n"
+     "}\n\n"
+     "static void ll_advance_one(DMAGPULinkedList *state, uint32_t cycles,\n"
+     "                           const DMAGPULinkedListOps *ops, void *opaque) {\n"
+     "    if (!state->active || cycles == 0 || !ops || !ops->read_word) return;"))
+EXACT.append(("src/dma.c",
+     "    dma_gpu_ll_start(&gpu_linked_list, start_addr, 0x40000u);\n",
+     "    dma_gpu_ll_start(&gpu_linked_list, start_addr, 0x40000u);\n"
+     "    dma_gpu_ll_predict(&gpu_linked_list, &gpu_ll_ops, NULL);\n"))
 
 for rel, old, new in EXACT:
     path = f"{root}/{rel}"

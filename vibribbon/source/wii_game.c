@@ -232,7 +232,11 @@ static void on_vblank(void)
     }
     static uint64_t t_present, t_last;
     uint64_t t0 = gettime();
-    if (!di.disabled && frame % 4 == 0)
+    if (frame == 1) t_last = t0;
+    /* Show every 2nd frame while the guest keeps ahead of real time (audio
+     * queued past 50 ms), every 4th while it is behind. */
+    unsigned every = wii_audio_queued() > 2400 ? 2 : 4;
+    if (!di.disabled && frame % every == 0)
         wii_present(gpu_get_vram(), (int)di.display_x, (int)di.display_y,
                     (int)di.width, (int)di.height);
     t_present += gettime() - t0;
@@ -374,6 +378,13 @@ void wii_run_game(void)
      * leaves idle_skip off); enabling it routes interrupt checks to the
      * VSync wait skip in wii_idle.c instead. */
     g_idle_skip_enabled = 1;
+#ifdef VIB_FAST
+    {   /* make FAST=1: GPU linked-list DMA predicted and walked lazily
+         * (patch_runtime.py); not packet-exact if the CPU rewrites a list in flight */
+        extern int g_dma_gpu_ll_fast;
+        g_dma_gpu_ll_fast = 1;
+    }
+#endif
     wii_stage(8, "about to run scheduler");
     wii_log("executing from PC=0x%08X\n", s_cpu.pc);
 
