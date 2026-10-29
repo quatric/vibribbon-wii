@@ -279,6 +279,76 @@ EXACT.append(("src/dma.c",
      "    dma_gpu_ll_start(&gpu_linked_list, start_addr, 0x40000u);\n"
      "    dma_gpu_ll_predict(&gpu_linked_list, &gpu_ll_ops, NULL);\n"))
 
+# Interrupt check at a block edge: when nothing can be delivered (no unmasked
+# request, or one the CPU is masking), do psx_check_interrupts' own no-delivery
+# bookkeeping without entering it. Its prologue alone was most of the cost of
+# every edge. Edges that need anything else still take the full path.
+EXACT.append(("src/interrupts.c",
+     "void psx_check_interrupts_at(CPUState* cpu, uint32_t resume_pc) {\n"
+     "    uint32_t prev = s_compiled_interrupt_resume_pc;\n",
+     "void psx_check_interrupts_at(CPUState* cpu, uint32_t resume_pc) {\n"
+     "    extern int savestate_pending(void);\n"
+     "    extern int psx_netplay_active(void);\n"
+     "    extern int g_ls_suppress_record;\n"
+     "    if (!in_exception && !s_defer_switch_pending && g_idle_skip_enabled >= 0 &&\n"
+     "        ((s_fast_maintenance + 1u) & 0x3FFFu) != 0 &&\n"
+     "        !savestate_pending() && !psx_netplay_active()) {\n"
+     "        psx_cyc_batch_flush();\n"
+     "        uint32_t sr = cpu->cop0[COP0_SR];\n"
+     "        int lean = 0;\n"
+     "        if ((i_stat & i_mask) != 0) {\n"
+     "            if (!(sr & 0x01u) || !(sr & (1u << 10))) {\n"
+     "                s_irq_path_entry++;\n"
+     "                s_irq_path_fast_sr++;\n"
+     "                lean = 1;\n"
+     "            }\n"
+     "        } else if ((cpu->cop0[COP0_CAUSE] & sr & 0x0300u) == 0) {\n"
+     "            s_irq_path_entry++;\n"
+     "            if (g_idle_skip_enabled > 0) {\n"
+     "                uint32_t check_pc = g_dirty_safe_resume_pc ? g_dirty_safe_resume_pc : resume_pc;\n"
+     "                s_last_interrupt_check_pc = check_pc;\n"
+     "                s_last_interrupt_check_cycle = psx_get_cycle_count();\n"
+     "                uint32_t prev_pc = s_compiled_interrupt_resume_pc;\n"
+     "                s_compiled_interrupt_resume_pc = resume_pc;\n"
+     "                psx_idle_note_check(cpu, check_pc);\n"
+     "                s_compiled_interrupt_resume_pc = prev_pc;\n"
+     "            }\n"
+     "            if ((i_stat & i_mask) == 0) {\n"
+     "                s_irq_path_fast_none++;\n"
+     "                lean = 1;\n"
+     "            } else {\n"
+     "                s_irq_path_entry--;     /* the full path counts this edge */\n"
+     "            }\n"
+     "        }\n"
+     "        if (lean) {\n"
+     "            ++s_fast_maintenance;\n"
+     "            if (g_ls_suppress_record > 0) g_ls_suppress_record--;\n"
+     "            return;\n"
+     "        }\n"
+     "    }\n"
+     "    uint32_t prev = s_compiled_interrupt_resume_pc;\n"))
+
+# MEM1 is 24 MB and the generated code is most of it. Arrays the game rarely or
+# never touches (debug traces, the BIOS ROM copy, savestate and upload staging
+# buffers, memory cards, the CD audio ring) go in a MEM2 section placed by
+# mem2.ld; wii_main.c zeroes it before anything runs.
+MEM2 = '__attribute__((section(".bss.mem2"))) '
+for rel, decl in [
+        ("src/spu.c", "static SpuShadowFrameTap s_shadow_tap[SPU_SHADOW_TAP_FRAMES];"),
+        ("src/spu.c", "static int16_t  cd_ring[SPU_CD_RING_FRAMES * 2u];"),
+        ("src/dirty_ram_interp.c", "static ls_op_t  s_ls_trace[LS_TRACE_CAP];"),
+        ("src/mdec.c", "static MDECDebugEvent mdec_trace[MDEC_TRACE_CAP];"),
+        ("src/cdrom.c", "static CdTimingRecord s_cd_timing[CD_TIMING_CAP];"),
+        ("src/memory.c", "static ImaskTraceEntry imask_trace[IMASK_TRACE_CAP];"),
+        ("src/memory.c", "static uint8_t bios_rom[BIOS_ROM_SIZE];"),
+        ("src/overlay_loader.c", "static LoadedPair s_loaded_pairs[LOADED_PAIR_CAP];"),
+        ("src/overlay_loader.c", "static LazyMan s_lazy_man[LAZY_MAN_CAP];"),
+        ("src/overlay_loader.c", "static LazyMissEntry s_lazy_miss_cache[LAZY_MISS_CACHE_CAP];"),
+        ("src/memcard.c", "static MemCard cards[MAX_CARDS];"),
+        ("src/gpu.c", "static uint16_t vram_write_pixels[1024 * 512];"),
+        ("src/boot_state.c", "static uint16_t s_vram_mirror[VRAM_W * VRAM_H];")]:
+    EXACT.append((rel, decl + "\n", "static " + MEM2 + decl[len("static "):] + "\n"))
+
 for rel, old, new in EXACT:
     path = f"{root}/{rel}"
     text = open(path).read()

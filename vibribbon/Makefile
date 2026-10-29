@@ -26,13 +26,13 @@ DEFS := -DPSX_NO_DEBUG_TOOLS -DPSX_WII=1 -DPSX_NATIVE_BUILD=1 -DPSX_ENABLE_BLOCK
 INC  := -Isource/shim -Isource -I$(RT)/include -I$(GEN)/main -I$(FW)/recompiler/src -I$(FW)/recompiler/lib/toml11 \
         -I$(BUILD)/libwiiinput/include -I$(LIBOGC)/include -I/opt/devkitpro/portlibs/ppc/include -I/opt/devkitpro/portlibs/wii/include
 OPT      ?= -O2
-GEN_OPT  ?= -Os
+GEN_OPT  ?= -O2
 CFLAGS   := $(OPT) $(MACH) $(DEFS) $(INC) -ffunction-sections -fdata-sections -Wno-unused-result
 CXXFLAGS := $(CFLAGS) -std=gnu++17
 # Link-time optimisation over the runtime and host only (the generated code is
 # too large for it): lets device servicing and host stubs inline across files.
 LTO      ?= -flto
-LDFLAGS  := $(MACH) $(OPT) $(LTO) -Wl,--gc-sections -Wl,--wrap=psx_fatal_halt -Wl,--wrap=psx_crash_trace_dump -Wl,--wrap=psx_idle_note_check -L$(BUILD)/libwiiinput/lib -L$(LIBOGC)/lib/wii -L/opt/devkitpro/portlibs/ppc/lib -L/opt/devkitpro/portlibs/wii/lib
+LDFLAGS  := $(MACH) $(OPT) $(LTO) -Wl,--gc-sections -Wl,--wrap=psx_fatal_halt -Wl,--wrap=psx_crash_trace_dump -Wl,--wrap=psx_idle_note_check -B$(CURDIR)/ld/ -L$(BUILD)/libwiiinput/lib -L$(LIBOGC)/lib/wii -L/opt/devkitpro/portlibs/ppc/lib -L/opt/devkitpro/portlibs/wii/lib
 LIBS     := -linput-wii -lwiikeyboard -lfat -lz -lwiiuse -lbte -logc -lm
 
 RT_C := memory gpu gpu_sw_renderer gpu_render gpu_vram_dirty dma dma_gpu_ll timers \
@@ -67,8 +67,8 @@ all: vibribbon.dol
 vibribbon.dol: vibribbon.elf
 	elf2dol $< $@
 
-vibribbon.elf: $(OBJS)
-	$(CXX) $(LDFLAGS) $^ $(LIBS) -o $@
+vibribbon.elf: $(OBJS) ld/rvl.ld
+	$(CXX) $(LDFLAGS) $(filter %.o,$^) $(LIBS) -o $@
 
 $(OBJ):
 	mkdir -p $(OBJ)
@@ -86,7 +86,8 @@ $(OBJ)/host_%.o: source/%.c | $(OBJ)
 DISP := psx_dispatch_game_compiled psx_game_address_in_text psx_game_is_function_entry \
         psx_game_text_native_ok psx_game_text_native_ok_full
 ren = $(foreach s,$(DISP),-D$(s)=$(1)_$(s))
-# The generated code is most of the binary; -Os keeps it inside MEM1.
+# The generated code is most of the binary; it fits MEM1 at -O2 because the
+# runtime's cold arrays live in MEM2 (ld/rvl.ld).
 define GENRULE
 $(OBJ)/gen_$(1)_%.o: $(GEN)/$(1)/%.c | $(OBJ)
 	$(CC) $(filter-out $(OPT),$(CFLAGS)) $(GEN_OPT) $(2) -I$(GEN)/$(1) -c $$< -o $$@

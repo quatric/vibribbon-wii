@@ -13,6 +13,11 @@
 int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
+    {   /* the MEM2 section (mem2.ld) is not part of the DOL's zeroed bss */
+        extern char __mem2_start[], __mem2_end[];
+        memset(__mem2_start, 0, (size_t)(__mem2_end - __mem2_start));
+        DCFlushRange(__mem2_start, (u32)(__mem2_end - __mem2_start));
+    }
     SYS_STDIO_Report(true);
     VIDEO_Init();
     wii_video_init();

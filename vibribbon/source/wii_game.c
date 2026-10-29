@@ -284,7 +284,7 @@ static volatile unsigned s_prof_done, s_prof_idle;
 static void *profiler(void *arg)
 {
     (void)arg;
-    sleep(VIB_PROFILE);                 /* skip boot; sample steady state */
+    for (int i = 0; i < VIB_PROFILE; i++) sleep(1);   /* skip boot; one long sleep overflows the tick count */
     wii_log("profile: sampling\n");
     unsigned n = 0, idle = 0;
     while (n < PROF_SAMPLES) {

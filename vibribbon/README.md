@@ -117,5 +117,8 @@ Not done:
 - libwiiupdate self-update hook.
 - Testing on real hardware.
 
-MEM1 is tight: the build is about 20.7 MB of the Wii's 24 MB (18.6 MB with
-`VIB_BLOCK_CYCLES=1`), and it needs roughly 2.5 MB free for its heap. Generated code is built at `-Os` for that reason.
+MEM1 is tight. The generated code is built at `-O2` and takes most of it, so
+the runtime's cold arrays (debug traces, the BIOS ROM copy, savestate and
+upload staging, memory cards, the CD audio ring, about 6 MB) are placed at the
+bottom of MEM2 by `ld/rvl.ld`. MEM1 holds about 18.4 MB (16.1 MB with
+`VIB_BLOCK_CYCLES=1`), leaving the rest for the heap.
