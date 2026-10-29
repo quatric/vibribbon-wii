@@ -718,6 +718,49 @@ for w, t in (("32", "uint32_t"), ("16", "uint16_t"), ("8", "uint8_t")):
          f"static {t} mmio_read{w}(uint32_t addr) {{\n"
          "    extern void psx_devices_mmio_sync_read(void);\n"
          "    psx_devices_mmio_sync_read();\n"))
+# Every game call checks its code ranges twice (native_ok, then the dispatch
+# itself). text_seq counts every change the range memo keys on, so a repeat of
+# the last query with nothing changed since is answered before the memo.
+EXACT.append(("src/memory.c",
+     "static uint32_t text_epoch = 1;\n",
+     "static uint32_t text_epoch = 1;\n"
+     "static uint32_t text_seq;               /* bumped with any text_page_gen / text_epoch */\n"))
+PATCHES.append(("src/memory.c", r"(text_page_gen\[[^\]\n]*\]\+\+;|text_epoch\+\+;)", r"\1 text_seq++;"))
+EXACT.append(("src/memory.c",
+     "    TextRangeMemo *m = &s_range_memo[((uintptr_t)lo_len_pairs >> 3) & 511u];\n"
+     "    if (m->pairs == lo_len_pairs && m->count == count && m->epoch == text_epoch &&\n"
+     "        text_page_gen[m->p0] == m->g0 && text_page_gen[m->p1] == m->g1) {\n"
+     "        if (!m->ok) g_text_native_blocked++;\n"
+     "        return m->ok;\n"
+     "    }\n",
+     "    static const uint32_t *s_fc_pairs;\n"
+     "    static uint32_t s_fc_count, s_fc_pc, s_fc_seq;\n"
+     "    static int s_fc_ok;\n"
+     "    if (lo_len_pairs == s_fc_pairs && count == s_fc_count && exec_pc == s_fc_pc &&\n"
+     "        text_seq == s_fc_seq) {\n"
+     "        if (!s_fc_ok) g_text_native_blocked++;\n"
+     "        return s_fc_ok;\n"
+     "    }\n"
+     "    TextRangeMemo *m = &s_range_memo[((uintptr_t)lo_len_pairs >> 3) & 511u];\n"
+     "    if (m->pairs == lo_len_pairs && m->count == count && m->epoch == text_epoch &&\n"
+     "        text_page_gen[m->p0] == m->g0 && text_page_gen[m->p1] == m->g1) {\n"
+     "        if (!m->ok) g_text_native_blocked++;\n"
+     "        s_fc_pairs = lo_len_pairs; s_fc_count = count; s_fc_pc = exec_pc;\n"
+     "        s_fc_seq = text_seq; s_fc_ok = m->ok;\n"
+     "        return m->ok;\n"
+     "    }\n"))
+# The AOT blocklist is empty unless PSX_AOT_BLOCK is set.
+EXACT.append(("src/memory.c",
+     "static int aot_blocked(uint32_t phys) {\n"
+     "    if (s_aot_block_n < 0) aot_block_init();\n",
+     "static inline int aot_blocked(uint32_t phys) {\n"
+     "    if (s_aot_block_n == 0) return 0;\n"
+     "    if (s_aot_block_n < 0) aot_block_init();\n"))
+EXACT.append(("src/fntrace.c",
+     "    text_xlate_on_dispatch(cpu, target);\n",
+     "#ifndef PSX_WII                         /* no string translation on the Wii */\n"
+     "    text_xlate_on_dispatch(cpu, target);\n"
+     "#endif\n"))
 
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed
