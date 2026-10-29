@@ -816,6 +816,24 @@ EXACT.append(("src/bios_hle.c",
      "    return;\n"
      "#endif\n"))
 
+# Word stores to RAM above the kernel window: none of the BIOS-scratch,
+# Tomba card or kernel-bless cases apply there, so skip their tests (and the
+# register saves they cost) and keep only the hooks that can fire.
+EXACT.append(("src/memory.c",
+     "    uint32_t phys = psx_phys_addr(addr);\n\n    /* The generated BIOS mirrors",
+     "    uint32_t phys = psx_phys_addr(addr);\n"
+     "#ifdef PSX_WII\n"
+     "    if (phys - DIRTY_RAM_KERNEL_TRACK_BYTES < RAM_SIZE - DIRTY_RAM_KERNEL_TRACK_BYTES &&\n"
+     "        !g_card_data_writes_armed && phys != D44_PHYS) {\n"
+     "        parity_trace_note_write(phys, 4, effective_store_pc());\n"
+     "        text_guard_note_write(phys, val, 4);\n"
+     "        overlay_watch_note_write(phys, 4);\n"
+     "        uint32_t le = __builtin_bswap32(val);\n"
+     "        memcpy(&ram[phys], &le, 4);\n"
+     "        return;\n"
+     "    }\n"
+     "#endif\n\n    /* The generated BIOS mirrors"))
+
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed
 # its due cycle, after any command answered in the same pass. Advertising it
