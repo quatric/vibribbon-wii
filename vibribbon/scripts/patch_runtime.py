@@ -625,6 +625,53 @@ EXACT.append(("src/gpu_sw_renderer.c",
      "        }\n"
      "    }\n"
      "    gpu_vram_dirty_mark_rect(x0, y0, w, h);\n"))
+# The IRQ compare runs on every SPU RAM access the renderer makes: test the
+# target against the accessed unit range instead of walking it. Units past the
+# top of RAM wrap to 0 as the walk's 16-bit compare did.
+EXACT.append(("src/spu.c",
+     "    for (uint32_t u = first; u <= last; u++) {\n"
+     "        if ((u & 0xFFFFu) == target) {\n"
+     "            if (!irq_flag) {\n"
+     "                irq_flag = 1;\n"
+     "                psx_irq_raise(9u, u << 3);\n"
+     "                spu_event_record(SPU_EV_IRQ, 0xFF, u << 3);\n"
+     "            }\n"
+     "            return;\n"
+     "        }\n"
+     "    }\n",
+     "    uint32_t u;\n"
+     "    if (target - first <= last - first) u = target;\n"
+     "    else if (last > 0xFFFFu && target + 0x10000u <= last) u = target + 0x10000u;\n"
+     "    else return;\n"
+     "    if (!irq_flag) {\n"
+     "        irq_flag = 1;\n"
+     "        psx_irq_raise(9u, u << 3);\n"
+     "        spu_event_record(SPU_EV_IRQ, 0xFF, u << 3);\n"
+     "    }\n"))
+# Most reverb taps land inside the work area already: skip the division.
+EXACT.append(("src/spu.c",
+     "    rel %= (int32_t)size;\n"
+     "    if (rel < 0) rel += (int32_t)size;\n",
+     "    if ((uint32_t)rel >= size) {\n"
+     "        rel %= (int32_t)size;\n"
+     "        if (rel < 0) rel += (int32_t)size;\n"
+     "    }\n"))
+# Two debug rings fed on every dispatch (recent targets, stack-domain
+# switches); nothing reads them on the Wii.
+EXACT.append(("src/fntrace.c",
+     "    mod_runtime_on_dispatch(target);\n"
+     "    {\n",
+     "    mod_runtime_on_dispatch(target);\n"
+     "#ifndef PSX_WII\n"
+     "    {\n"))
+EXACT.append(("src/fntrace.c",
+     "            s_spdom_prev_sp = sp_now;\n"
+     "        }\n"
+     "    }\n",
+     "            s_spdom_prev_sp = sp_now;\n"
+     "        }\n"
+     "    }\n"
+     "#endif\n"))
 
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed

@@ -128,9 +128,16 @@ void wii_present(const uint16_t *vram, int x, int y, int w, int h)
      * The conversion writes through the cache and flushes once: uncached
      * stores to the XFB are one bus write each. */
     uint32_t *dst = (uint32_t *)MEM_K1_TO_K0(s_xfb[s_fb ^ 1]);
+    int prev_sy = -1;
     for (int dy = 0; dy < dh; dy++) {
-        const uint16_t *row = vram + (((y + (dy * h) / dh) & 511) << 10);
+        int sy = (y + (dy * h) / dh) & 511;
         uint32_t *out = dst + dy * dw;
+        if (sy == prev_sy) {                 /* scaled up: repeat the row above */
+            memcpy(out, out - dw, (size_t)dw * 4u);
+            continue;
+        }
+        prev_sy = sy;
+        const uint16_t *row = vram + (sy << 10);
         for (int dx = 0; dx < dw; dx++) {
             uint32_t a = s_ycbcr_lut[row[sx_map[dx * 2]] & 0x7FFF];
             uint32_t b = s_ycbcr_lut[row[sx_map[dx * 2 + 1]] & 0x7FFF];
