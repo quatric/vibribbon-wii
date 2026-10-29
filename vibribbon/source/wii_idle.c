@@ -98,6 +98,9 @@ void __wrap_psx_idle_note_check(CPUState *cpu, uint32_t check_pc)
     s_stores = g_guest_store_count; s_mmio = g_mmio_access_count;
     if (s_streak < STREAK_MIN) return;
 
+    /* Devices lag the CPU until their next deadline, and the distances below
+     * count from where they stand: catch them up so the skip counts from now. */
+    psx_devices_mmio_sync();
     uint32_t dist = psx_idle_cycles_to_next_observable_event();
     if (dist <= q) return;
     uint32_t k = (dist - 1u) / q;                         /* end strictly before the event */

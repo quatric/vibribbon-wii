@@ -53,33 +53,56 @@ static void use(int k)
     }
 }
 
+/* Selecting an image drops the guard's verified chunks, so an address that no
+ * program accepts (code the game patched runs interpreted) must not flip the
+ * image back and forth on every check. After such a miss the active program
+ * stays, and the others are tried again only once code in RAM changes. */
+extern uint32_t g_dirty_ram_code_gen;
+static uint32_t s_settled_gen;
+
+enum { OP_DISPATCH, OP_OK, OP_OK_FULL };
+
+static inline int call(int k, int op, CPUState *cpu, uint32_t addr)
+{
+    switch (op) {
+    case OP_DISPATCH: return s_prog[k].dispatch(cpu, addr);
+    case OP_OK:       return s_prog[k].ok(addr);
+    default:          return s_prog[k].ok_full(addr);
+    }
+}
+
+static inline int try_progs(int op, CPUState *cpu, uint32_t addr)
+{
+    int cur = s_cur;
+    if (call(cur, op, cpu, addr)) return 1;
+    if (s_settled_gen == g_dirty_ram_code_gen) return 0;
+    for (int i = 1; i < WII_MAIN_PROGS; i++) {
+        int k = (cur + i) % WII_MAIN_PROGS;
+        use(k);
+        if (call(k, op, cpu, addr)) return 1;
+    }
+    use(cur);
+    s_settled_gen = g_dirty_ram_code_gen;
+    return 0;
+}
+
 /* The boot loader's functions all lie in its own text, below the main
  * programs, so an address is either the boot loader's or a main program's:
  * one range test saves a table search on every check. */
 int psx_dispatch_game_compiled(CPUState *cpu, uint32_t addr)
 {
     if (boot_psx_game_address_in_text(addr)) return boot_psx_dispatch_game_compiled(cpu, addr);
-    for (int i = 0; i < WII_MAIN_PROGS; i++) {
-        int k = (s_cur + i) % WII_MAIN_PROGS;
-        use(k);
-        if (s_prog[k].dispatch(cpu, addr)) return 1;
-    }
-    return 0;
+    return try_progs(OP_DISPATCH, cpu, addr);
 }
 
-#define COMBINE_CHECK(name, field) \
+#define COMBINE_CHECK(name, op) \
     int name(uint32_t addr) \
     { \
         if (boot_psx_game_address_in_text(addr)) return boot_##name(addr); \
-        for (int i = 0; i < WII_MAIN_PROGS; i++) { \
-            int k = (s_cur + i) % WII_MAIN_PROGS; \
-            use(k); \
-            if (s_prog[k].field(addr)) return 1; \
-        } \
-        return 0; \
+        return try_progs(op, 0, addr); \
     }
-COMBINE_CHECK(psx_game_text_native_ok, ok)
-COMBINE_CHECK(psx_game_text_native_ok_full, ok_full)
+COMBINE_CHECK(psx_game_text_native_ok, OP_OK)
+COMBINE_CHECK(psx_game_text_native_ok_full, OP_OK_FULL)
 
 #define COMBINE_ANY(name, field) \
     int name(uint32_t addr) \

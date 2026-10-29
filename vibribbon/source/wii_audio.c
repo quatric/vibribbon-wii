@@ -1,10 +1,10 @@
 /* SPU output on the Wii audio interface.
  *
  * The SPU is clocked by guest time, as on the desktop host: every 768 guest
- * cycles is one 44.1 kHz frame. The runtime calls the pump at each vblank (and
- * per sample while the SPU IRQ is armed); it renders what guest time has
- * produced, resamples it to the interface's 48 kHz and queues it in a ring
- * that the audio DMA interrupt drains. */
+ * cycles is one 44.1 kHz frame. The runtime calls the pump at each vblank (and,
+ * while the SPU IRQ is armed, wherever it could fire); it renders what guest
+ * time has produced, resamples it to the interface's 48 kHz and queues it in a
+ * ring that the audio DMA interrupt drains. */
 #include <stdint.h>
 #include <string.h>
 #include <gccore.h>
@@ -14,6 +14,11 @@
 
 extern uint64_t psx_get_cycle_count(void);
 extern void psx_set_midframe_audio_pump(void (*fn)(void));
+extern void psx_set_spu_sample_due(uint64_t (*fn)(uint32_t ahead));
+extern void (*g_spu_access_hook)(void);
+extern uint16_t spu_get_ctrl(void);
+extern int psx_in_device_service;
+extern uint64_t g_spu_render_cycle;
 
 #define CYCLES_PER_FRAME 768u           /* 33.8688 MHz / 44100 Hz */
 #define DMA_FRAMES       256            /* 5.3 ms per DMA block at 48 kHz */
@@ -107,6 +112,7 @@ static void render_to(uint64_t now)
     uint32_t frames = (uint32_t)(target - s_rendered);
     s_rendered = target;
     s_stat_frames += frames;
+    g_spu_render_cycle = now;       /* CD input due later stays queued */
     while (frames) {
         int n = frames > RENDER_MAX ? RENDER_MAX : (int)frames;
         spu_render(buf, n);
@@ -115,11 +121,50 @@ static void render_to(uint64_t now)
     }
 }
 
-/* Called by the runtime at vblank and, while the SPU IRQ is enabled, at every
- * sample boundary. */
+/* While the SPU IRQ is enabled the runtime used to pump at every sample
+ * boundary. It now pumps only where the SPU could raise the IRQ (see
+ * sample_due), and the pumps in between are run here, in order, whenever the
+ * guest could see their result: before an SPU register or DMA access and
+ * before any other pump. Each renders what it always did, so the SPU sees the
+ * same calls. s_pumped is the guest time the pumps have covered. */
+static uint64_t s_pumped;
+static uint32_t s_origin_mod;           /* s_origin % CYCLES_PER_FRAME */
+
+/* The boundary at which the pumps render sample s_rendered + ahead. */
+static uint64_t sample_due(uint32_t ahead)
+{
+    if (!s_started) return UINT64_MAX;
+    uint64_t done = s_origin + (s_rendered + ahead + 1u) * CYCLES_PER_FRAME;
+    return done + (s_origin_mod ? CYCLES_PER_FRAME - s_origin_mod : 0u);
+}
+
+static void pump_boundaries(uint64_t t)
+{
+    if (s_started && (spu_get_ctrl() & 0x0040u)) {
+        uint64_t b = sample_due(0);
+        uint64_t first = s_pumped + CYCLES_PER_FRAME - (uint32_t)(s_pumped % CYCLES_PER_FRAME);
+        if (b < first) b = first;
+        for (; b <= t; b += CYCLES_PER_FRAME)
+            render_to(b);
+    }
+    if (t > s_pumped) s_pumped = t;
+}
+
+/* Inside a device pass, the pump for a boundary at the current cycle runs
+ * after the devices, so an access from a device comes before it. */
+static void spu_access(void)
+{
+    uint64_t now = psx_get_cycle_count();
+    pump_boundaries(psx_in_device_service ? now - 1u : now);
+}
+
+/* Called by the runtime at vblank and at the sample events. */
 static void pump(void)
 {
-    render_to(psx_get_cycle_count());
+    uint64_t now = psx_get_cycle_count();
+    pump_boundaries(now);
+    if (!s_started) s_origin_mod = (uint32_t)(now % CYCLES_PER_FRAME);
+    render_to(now);
 }
 
 uint32_t wii_audio_queued(void)
@@ -146,6 +191,8 @@ void wii_audio_init(void)
     AUDIO_StartDMA();
     s_dma_cur = 1;
     psx_set_midframe_audio_pump(pump);
+    psx_set_spu_sample_due(sample_due);
+    g_spu_access_hook = spu_access;
 }
 
 #ifdef VIB_WAVDUMP
