@@ -59,6 +59,7 @@ fi
 "$R" "$EXTRACT/SCES_028.73" --project-root "$FW" --seeds "$GAME/seeds/ghidra_funcs.txt" --out-dir "$GEN/boot" --strict >/dev/null
 "$R" "$EXTRACT/MAIN_G.EXE" --project-root "$FW" --out-dir "$GEN/main" --strict >/dev/null
 "$R" "$EXTRACT/MAIN_T.EXE" --project-root "$FW" --out-dir "$GEN/title" --strict >/dev/null
+python3 -I "$HERE/scripts/patch_gen.py" "$GEN"/boot/*_dispatch.c "$GEN"/main/*_dispatch.c "$GEN"/title/*_dispatch.c >/dev/null
 
 # BIOS: the game is validated on Sony's SCPH-5552 (PAL). Pass your own dump as
 # the second argument to use it; without one the build falls back to OpenBIOS.

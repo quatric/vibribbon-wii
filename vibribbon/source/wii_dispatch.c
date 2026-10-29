@@ -53,9 +53,12 @@ static void use(int k)
     }
 }
 
+/* The boot loader's functions all lie in its own text, below the main
+ * programs, so an address is either the boot loader's or a main program's:
+ * one range test saves a table search on every check. */
 int psx_dispatch_game_compiled(CPUState *cpu, uint32_t addr)
 {
-    if (boot_psx_dispatch_game_compiled(cpu, addr)) return 1;
+    if (boot_psx_game_address_in_text(addr)) return boot_psx_dispatch_game_compiled(cpu, addr);
     for (int i = 0; i < WII_MAIN_PROGS; i++) {
         int k = (s_cur + i) % WII_MAIN_PROGS;
         use(k);
@@ -67,7 +70,7 @@ int psx_dispatch_game_compiled(CPUState *cpu, uint32_t addr)
 #define COMBINE_CHECK(name, field) \
     int name(uint32_t addr) \
     { \
-        if (boot_##name(addr)) return 1; \
+        if (boot_psx_game_address_in_text(addr)) return boot_##name(addr); \
         for (int i = 0; i < WII_MAIN_PROGS; i++) { \
             int k = (s_cur + i) % WII_MAIN_PROGS; \
             use(k); \

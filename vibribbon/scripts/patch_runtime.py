@@ -92,28 +92,38 @@ EXACT.append(("src/memory.c",
      "void dirty_ram_text_exact_mismatch_stats(uint64_t *count,"))
 # Text guard cache. Once a main program has been loaded its text pages stay
 # flagged (the clean baseline is only taken for the boot EXE), so every
-# dispatch into it memcmp'd the function's ranges against the reference. A page
-# whose full contents compared equal to the active reference is now remembered
-# as such until something could change it: a page or executable-range mark, a
-# guest write that differs from the reference, or a switch of reference image.
-# This is the same trust the guard already places in never-touched pages.
+# dispatch into it memcmp'd the function's ranges against the reference. A
+# 256-byte chunk whose contents compared equal to the active reference is now
+# remembered as such until something could change it: a page or executable-
+# range mark, a guest write that differs from the reference, or a switch of
+# reference image. Chunks rather than pages, because the reference covers the
+# whole EXE and the game's data shares pages with its code. This is the same
+# trust the guard already places in never-touched pages.
 EXACT.append(("src/memory.c",
      "static inline void dirty_ram_mark_page(uint32_t phys) {\n    if (phys >= RAM_SIZE) return;\n"
      "    uint32_t page = phys >> DIRTY_RAM_PAGE_SHIFT;\n    uint32_t bit = 1u << (page & 31u);\n",
-     "static uint32_t text_verified_bitmap[DIRTY_RAM_BITMAP_WORDS];\n\n"
+     "#define TEXT_CHUNK_SHIFT 8u\n"
+     "static uint32_t text_verified_bitmap[(RAM_SIZE >> TEXT_CHUNK_SHIFT) / 32u];\n"
+     "static inline void text_unverify_page(uint32_t page) {   /* 16 chunks per 4 KB page */\n"
+     "    text_verified_bitmap[page >> 1] &= ~(0xFFFFu << ((page & 1u) * 16u));\n}\n"
+     "static inline int text_chunks_verified(uint32_t phys, uint32_t len) {\n"
+     "    for (uint32_t c = phys >> TEXT_CHUNK_SHIFT; c <= (phys + len - 1u) >> TEXT_CHUNK_SHIFT; c++)\n"
+     "        if (!(text_verified_bitmap[c >> 5] & (1u << (c & 31u)))) return 0;\n"
+     "    return 1;\n}\n\n"
      "static inline void dirty_ram_mark_page(uint32_t phys) {\n    if (phys >= RAM_SIZE) return;\n"
      "    uint32_t page = phys >> DIRTY_RAM_PAGE_SHIFT;\n    uint32_t bit = 1u << (page & 31u);\n"
-     "    text_verified_bitmap[page >> 5] &= ~bit;\n"))
+     "    text_unverify_page(page);\n"))
 EXACT.append(("src/memory.c",
      "    for (uint32_t page = first_page; page <= last_page; page++) {\n"
      "        dirty_ram_bitmap[page >> 5] |= (1u << (page & 31u));\n    }\n    g_dirty_ram_code_gen++;",
      "    for (uint32_t page = first_page; page <= last_page; page++) {\n"
      "        dirty_ram_bitmap[page >> 5] |= (1u << (page & 31u));\n"
-     "        text_verified_bitmap[page >> 5] &= ~(1u << (page & 31u));\n    }\n    g_dirty_ram_code_gen++;"))
+     "        text_unverify_page(page);\n    }\n    g_dirty_ram_code_gen++;"))
 EXACT.append(("src/memory.c",
      "        uint32_t page = phys >> DIRTY_RAM_PAGE_SHIFT;\n        text_modified_bitmap[page >> 5] |= (1u << (page & 31u));\n    }\n}",
      "        uint32_t page = phys >> DIRTY_RAM_PAGE_SHIFT;\n        text_modified_bitmap[page >> 5] |= (1u << (page & 31u));\n"
-     "        text_verified_bitmap[page >> 5] &= ~(1u << (page & 31u));\n    }\n}"))
+     "        uint32_t c = phys >> TEXT_CHUNK_SHIFT;   /* a write never straddles chunks */\n"
+     "        text_verified_bitmap[c >> 5] &= ~(1u << (c & 31u));\n    }\n}"))
 EXACT.append(("src/memory.c",
      "    memset(text_modified_bitmap, 0, sizeof(text_modified_bitmap));\n    memset(text_diverged_bitmap, 0, sizeof(text_diverged_bitmap));\n",
      "    memset(text_modified_bitmap, 0, sizeof(text_modified_bitmap));\n    memset(text_diverged_bitmap, 0, sizeof(text_diverged_bitmap));\n"
@@ -124,27 +134,21 @@ EXACT.append(("src/memory.c",
      "    memset(text_verified_bitmap, 0, sizeof(text_verified_bitmap));\n}\n"))
 EXACT.append(("src/memory.c",
      "    if (!(text_modified_bitmap[page >> 5] & bit) && !dirty_ram_is_dirty(phys))\n        return 1;\n",
-     "    if ((text_verified_bitmap[page >> 5] & bit) ||\n"
-     "        (!(text_modified_bitmap[page >> 5] & bit) && !dirty_ram_is_dirty(phys)))\n        return 1;\n"))
+     "    if (!(text_modified_bitmap[page >> 5] & bit) && !dirty_ram_is_dirty(phys))\n        return 1;\n"
+     "    if (text_chunks_verified(phys, text_ref_hi - phys < 256u ? text_ref_hi - phys : 256u))\n        return 1;\n"))
 EXACT.append(("src/memory.c",
-     "            for (p = p0; p <= p1; p++) {\n"
-     "                if ((text_modified_bitmap[p >> 5] & (1u << (p & 31u))) ||\n"
-     "                    dirty_ram_is_dirty(p << DIRTY_RAM_PAGE_SHIFT)) {",
-     "            for (p = p0; p <= p1; p++) {\n"
-     "                if (text_verified_bitmap[p >> 5] & (1u << (p & 31u))) continue;\n"
-     "                if ((text_modified_bitmap[p >> 5] & (1u << (p & 31u))) ||\n"
-     "                    dirty_ram_is_dirty(p << DIRTY_RAM_PAGE_SHIFT)) {"))
+     "        any = 1;\n        /* Page-clean fast path:",
+     "        any = 1;\n        if (text_chunks_verified(phys, len)) continue;\n        /* Page-clean fast path:"))
 EXACT.append(("src/memory.c",
      "            g_text_native_blocked++;\n            return 0;\n        }\n    }\n    if (!any) {",
      "            g_text_native_blocked++;\n            return 0;\n        }\n"
-     "        /* The range matched: try to verify its whole pages once. */\n"
-     "        for (uint32_t p = phys >> DIRTY_RAM_PAGE_SHIFT;\n"
-     "             p <= (phys + len - 1u) >> DIRTY_RAM_PAGE_SHIFT; p++) {\n"
-     "            uint32_t lo = p << DIRTY_RAM_PAGE_SHIFT, sz = 1u << DIRTY_RAM_PAGE_SHIFT;\n"
-     "            if ((text_verified_bitmap[p >> 5] & (1u << (p & 31u))) ||\n"
+     "        /* The range matched: verify the chunks it touches, once. */\n"
+     "        for (uint32_t c = phys >> TEXT_CHUNK_SHIFT; c <= (phys + len - 1u) >> TEXT_CHUNK_SHIFT; c++) {\n"
+     "            uint32_t lo = c << TEXT_CHUNK_SHIFT, sz = 1u << TEXT_CHUNK_SHIFT;\n"
+     "            if ((text_verified_bitmap[c >> 5] & (1u << (c & 31u))) ||\n"
      "                lo < text_ref_lo || lo + sz > text_ref_hi) continue;\n"
      "            if (memcmp(ram + lo, text_ref_image + (lo - text_ref_lo), sz) == 0)\n"
-     "                text_verified_bitmap[p >> 5] |= 1u << (p & 31u);\n"
+     "                text_verified_bitmap[c >> 5] |= 1u << (c & 31u);\n"
      "        }\n    }\n    if (!any) {"))
 
 # Per-instruction timing helpers: at -Os GCC keeps these as separate calls, so
