@@ -97,6 +97,13 @@ for fn in ("psx_cyc_charge(uint32_t cycles)", "psx_cyc_base(CPUState* cpu)",
            "psx_cyc_deps(CPUState* cpu, uint32_t reg_mask)", "psx_cyc_lds(CPUState* cpu)"):
     EXACT.append(("include/psx_cyc.h", f"static inline void {fn} {{",
                   f"static inline __attribute__((always_inline)) void {fn} {{"))
+# CD deadline: once the current CD interrupt has been presented to INTC
+# (latched), presentation can do nothing more until the guest acks it through
+# an MMIO write, which recomputes deadlines anyway. Advertising it as "due now"
+# made every instruction run a full device pass while an interrupt was pending.
+EXACT.append(("src/cdrom.c",
+     "    if (cdrom_irq_mask_matches_reason(irq_enable, irq_flag)) {\n        int rem = irq_present_rem_cycles();",
+     "    if (cdrom_irq_mask_matches_reason(irq_enable, irq_flag) && !cdrom_intc_request_latched) {\n        int rem = irq_present_rem_cycles();"))
 for rel, old, new in EXACT:
     path = f"{root}/{rel}"
     text = open(path).read()

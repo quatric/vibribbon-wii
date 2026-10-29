@@ -67,7 +67,7 @@ in, into `prof.bin` (pc, lr and guest pc per sample, big-endian).
 ## Status
 
 Boots with the SCPH-5552 BIOS and runs through the NanaOn-Sha logo and the intro
-to the title screen in Dolphin, at about 9 frames per second (the PS1 runs at 50)
+to the title screen in Dolphin, at about 10 frames per second (the PS1 runs at 50)
 in the default cycle-exact mode.
 Not yet playable.
 
@@ -93,5 +93,5 @@ Not done:
 - libwiiupdate self-update hook.
 - Testing on real hardware.
 
-MEM1 is tight: the build is about 20.6 MB of the Wii's 24 MB, and it needs
+MEM1 is tight: the build is about 18.6 MB of the Wii's 24 MB, and it needs
 roughly 2.5 MB free for its heap. Generated code is built at `-Os` for that reason.

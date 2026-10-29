@@ -29,7 +29,10 @@ OPT      ?= -O2
 GEN_OPT  ?= -Os
 CFLAGS   := $(OPT) $(MACH) $(DEFS) $(INC) -ffunction-sections -fdata-sections -Wno-unused-result
 CXXFLAGS := $(CFLAGS) -std=gnu++17
-LDFLAGS  := $(MACH) -Wl,--gc-sections -Wl,--wrap=psx_fatal_halt -Wl,--wrap=psx_crash_trace_dump -L$(BUILD)/libwiiinput/lib -L$(LIBOGC)/lib/wii -L/opt/devkitpro/portlibs/ppc/lib -L/opt/devkitpro/portlibs/wii/lib
+# Link-time optimisation over the runtime and host only (the generated code is
+# too large for it): lets device servicing and host stubs inline across files.
+LTO      ?= -flto
+LDFLAGS  := $(MACH) $(OPT) $(LTO) -Wl,--gc-sections -Wl,--wrap=psx_fatal_halt -Wl,--wrap=psx_crash_trace_dump -L$(BUILD)/libwiiinput/lib -L$(LIBOGC)/lib/wii -L/opt/devkitpro/portlibs/ppc/lib -L/opt/devkitpro/portlibs/wii/lib
 LIBS     := -linput-wii -lwiikeyboard -lfat -lz -lwiiuse -lbte -logc -lm
 
 RT_C := memory gpu gpu_sw_renderer gpu_render gpu_vram_dirty dma dma_gpu_ll timers \
@@ -71,11 +74,11 @@ $(OBJ):
 	mkdir -p $(OBJ)
 
 $(OBJ)/rt_%.o: $(RT)/src/%.c | $(OBJ)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(LTO) -c $< -o $@
 $(OBJ)/rt_%.o: $(RT)/src/%.cpp | $(OBJ)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(LTO) -c $< -o $@
 $(OBJ)/host_%.o: source/%.c | $(OBJ)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(LTO) -c $< -o $@
 
 # generated code: boot / main / bios each include their own decls header. The
 # two game programs export identical dispatch entry points, so each gets its
