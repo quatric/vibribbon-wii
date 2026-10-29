@@ -20,7 +20,7 @@ FW_REPO="https://github.com/Alexbeav/psxrecomp.git"
 FW_COMMIT="799e74c6ad347d1b292166de7e0fecc8fa6e17be"
 GAME_REPO="https://github.com/alexbeavs-ps1-ports/vib-ribbon-recomp.git"
 
-mkdir -p "$B" "$EXTRACT" "$GEN/boot" "$GEN/main"
+mkdir -p "$B" "$EXTRACT" "$GEN/boot" "$GEN/main" "$GEN/title"
 
 if [ ! -d "$FW/.git" ]; then
     git clone -q "$FW_REPO" "$FW"
@@ -51,6 +51,7 @@ python3 -I "$ROOT/tools/vibpak.py" "$BIN" extract "$EXTRACT" >/dev/null
 R="$FW/recompiler/build/psxrecomp-game"
 "$R" "$EXTRACT/SCES_028.73" --project-root "$FW" --seeds "$GAME/seeds/ghidra_funcs.txt" --out-dir "$GEN/boot" --strict >/dev/null
 "$R" "$EXTRACT/MAIN_G.EXE" --project-root "$FW" --out-dir "$GEN/main" --strict >/dev/null
+"$R" "$EXTRACT/MAIN_T.EXE" --project-root "$FW" --out-dir "$GEN/title" --strict >/dev/null
 
 # BIOS: the game is validated on Sony's SCPH-5552 (PAL). Pass your own dump as
 # the second argument to use it; without one the build falls back to OpenBIOS.
@@ -81,9 +82,11 @@ const uint32_t psx_bios_registry_count = 1u;
 EOF
 cp "$BIOS_ROM" "$B/bios.bin"
 
-# Reference text image for the runtime's native-code guard: the text of both
-# programs in one range, big-endian header {phys_lo, len} then the bytes.
-python3 -I - "$EXTRACT/SCES_028.73" "$EXTRACT/MAIN_G.EXE" "$B/text.bin" <<'PY'
+# Reference text images for the runtime's native-code guard, one per main
+# program (MAIN_G and MAIN_T load at the same address): the boot loader's and
+# that program's text in one range, big-endian header {phys_lo, len}, then bytes.
+for pair in "MAIN_G.EXE text.bin" "MAIN_T.EXE text_t.bin"; do
+python3 -I - "$EXTRACT/SCES_028.73" "$EXTRACT/${pair% *}" "$B/${pair#* }" <<'PY'
 import struct, sys
 parts = []
 for path in sys.argv[1:3]:
@@ -97,6 +100,7 @@ for a, b in parts:
     img[a - lo:a - lo + len(b)] = b
 open(sys.argv[3], "wb").write(struct.pack(">II", lo, len(img)) + bytes(img))
 PY
+done
 
 # USB/Wii/GameCube/Classic input and self-update libraries (devkitPPC).
 export DEVKITPRO="${DEVKITPRO:-/opt/devkitpro}" DEVKITPPC="${DEVKITPPC:-/opt/devkitpro/devkitPPC}"
@@ -107,4 +111,4 @@ for lib in libwiiinput libwiiupdate; do
 done
 make -C "$B/libwiiinput" >/dev/null
 
-echo "generated:$(ls "$GEN"/boot/*.c "$GEN"/main/*.c "$GEN"/bios/*.c | wc -l) C files in $GEN"
+echo "generated:$(ls "$GEN"/boot/*.c "$GEN"/main/*.c "$GEN"/title/*.c "$GEN"/bios/*.c | wc -l) C files in $GEN"

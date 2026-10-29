@@ -22,10 +22,12 @@ OBJ   := $(BUILD)/obj
 LIBOGC := /opt/devkitpro/libogc
 
 MACH := -mrvl -mcpu=750 -meabi -mhard-float
-DEFS := -DPSX_NO_DEBUG_TOOLS -DPSX_WII=1 -DPSX_NATIVE_BUILD=1 -DPSX_ENABLE_BLOCK_CYCLES=1 -DPSX_HAS_GAME_DISPATCH=1 $(if $(EXIT_SECONDS),-DVIB_EXIT_SECONDS=$(EXIT_SECONDS)) $(if $(STOP_AT),-DVIB_STOP_AT=$(STOP_AT))
+DEFS := -DPSX_NO_DEBUG_TOOLS -DPSX_WII=1 -DPSX_NATIVE_BUILD=1 -DPSX_ENABLE_BLOCK_CYCLES=1 -DPSX_HAS_GAME_DISPATCH=1 $(if $(EXIT_SECONDS),-DVIB_EXIT_SECONDS=$(EXIT_SECONDS)) $(if $(STOP_AT),-DVIB_STOP_AT=$(STOP_AT)) $(if $(PROFILE),-DVIB_PROFILE=$(PROFILE))
 INC  := -Isource/shim -Isource -I$(RT)/include -I$(GEN)/main -I$(FW)/recompiler/src -I$(FW)/recompiler/lib/toml11 \
         -I$(BUILD)/libwiiinput/include -I$(LIBOGC)/include -I/opt/devkitpro/portlibs/ppc/include -I/opt/devkitpro/portlibs/wii/include
-CFLAGS   := -Os $(MACH) $(DEFS) $(INC) -ffunction-sections -fdata-sections -Wno-unused-result
+OPT      ?= -O2
+GEN_OPT  ?= -Os
+CFLAGS   := $(OPT) $(MACH) $(DEFS) $(INC) -ffunction-sections -fdata-sections -Wno-unused-result
 CXXFLAGS := $(CFLAGS) -std=gnu++17
 LDFLAGS  := $(MACH) -Wl,--gc-sections -Wl,--wrap=psx_fatal_halt -Wl,--wrap=psx_crash_trace_dump -L$(BUILD)/libwiiinput/lib -L$(LIBOGC)/lib/wii -L/opt/devkitpro/portlibs/ppc/lib -L/opt/devkitpro/portlibs/wii/lib
 LIBS     := -linput-wii -lwiikeyboard -lfat -lz -lwiiuse -lbte -logc -lm
@@ -43,8 +45,11 @@ RT_C := memory gpu gpu_sw_renderer gpu_render gpu_vram_dirty dma dma_gpu_ll time
         psx_stick freeze_dump_policy freeze_heartbeat cosim cosim_state mod_builtin_speed boot_state
 RT_CXX := gte pgxp mod_runtime mod_packages text_xlate cue_sheet disc_path disc_identity
 
-GEN_OBJS := $(foreach d,boot main bios,\
-              $(patsubst $(GEN)/$(d)/%.c,$(OBJ)/gen_$(d)_%.o,$(wildcard $(GEN)/$(d)/*.c)))
+# Game programs: the boot loader plus the main executables the game chains to
+# (MAIN_T title, MAIN_G game). Each is partially linked into one object.
+PROGS    := boot main title
+gen_objs  = $(patsubst $(GEN)/$(1)/%.c,$(OBJ)/gen_$(1)_%.o,$(wildcard $(GEN)/$(1)/*.c))
+GEN_OBJS := $(foreach d,$(PROGS),$(OBJ)/prog_$(d).o) $(call gen_objs,bios)
 HOST_C := $(wildcard source/*.c)
 
 OBJS := $(addprefix $(OBJ)/rt_,$(addsuffix .o,$(RT_C))) \
@@ -52,6 +57,7 @@ OBJS := $(addprefix $(OBJ)/rt_,$(addsuffix .o,$(RT_C))) \
         $(GEN_OBJS) \
         $(patsubst source/%.c,$(OBJ)/host_%.o,$(HOST_C))
 
+.SECONDEXPANSION:
 .PHONY: all clean
 all: vibribbon.dol
 
@@ -77,13 +83,23 @@ $(OBJ)/host_%.o: source/%.c | $(OBJ)
 DISP := psx_dispatch_game_compiled psx_game_address_in_text psx_game_is_function_entry \
         psx_game_text_native_ok psx_game_text_native_ok_full
 ren = $(foreach s,$(DISP),-D$(s)=$(1)_$(s))
+# The generated code is most of the binary; -Os keeps it inside MEM1.
 define GENRULE
 $(OBJ)/gen_$(1)_%.o: $(GEN)/$(1)/%.c | $(OBJ)
-	$(CC) $(CFLAGS) $(2) -I$(GEN)/$(1) -c $$< -o $$@
+	$(CC) $(filter-out $(OPT),$(CFLAGS)) $(GEN_OPT) $(2) -I$(GEN)/$(1) -c $$< -o $$@
 endef
-$(eval $(call GENRULE,boot,$(call ren,boot)))
-$(eval $(call GENRULE,main,$(call ren,main)))
+$(foreach d,$(PROGS),$(eval $(call GENRULE,$(d),$(call ren,$(d)))))
 $(eval $(call GENRULE,bios,))
+
+# Keep the per-file objects so a single changed file doesn't rebuild a program.
+.SECONDARY: $(foreach d,$(PROGS),$(call gen_objs,$(d)))
+
+# The main executables load at the same address, so their func_* symbols
+# clash; only each program's renamed dispatch entry points stay global.
+$(OBJ)/prog_%.o: $$(call gen_objs,$$*)
+	$(PREFIX)ld -r $^ -o $@.tmp
+	$(PREFIX)objcopy $(foreach s,$(DISP),--keep-global-symbol=$*_$(s)) $@.tmp $@
+	rm -f $@.tmp
 
 clean:
 	rm -f vibribbon.elf vibribbon.dol

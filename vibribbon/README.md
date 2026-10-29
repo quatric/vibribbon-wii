@@ -17,22 +17,23 @@ scripts/gen.sh "/path/to/Vib-Ribbon (Europe) (En,Fr,De,Es,It) (Track 1).bin" [/p
 make
 ```
 
-`gen.sh` reads the boot executable and `MAIN_G.EXE` from the disc image, runs the
-recompiler on both, recompiles the BIOS and builds libwiiinput. Everything lands
-in `build/`.
+`gen.sh` reads the boot executable, `MAIN_T.EXE` (title) and `MAIN_G.EXE` (game)
+from the disc image, runs the recompiler on each, recompiles the BIOS and builds
+libwiiinput. Everything lands in `build/`. `MAIN_K.EXE` (the kiosk demo build) is
+not recompiled and would run in the runtime's interpreter.
 
 The game is validated on Sony's SCPH-5552 (Europe) BIOS. Pass your own dump as
 the second argument; it must be 524288 bytes with SHA-256
 `1faaa18fa820a0225e488d9f086296b8e6c46df739666093987ff7d8fd352c09`. Without it
-the build falls back to OpenBIOS (MIT licensed), which boots but does not yet
-start the game.
+the build falls back to OpenBIOS (MIT licensed), which does not start this disc.
 
 ## SD card layout
 
 ```
 sd:/apps/vibribbon/boot.dol
 sd:/apps/vibribbon/bios.bin               (build/bios.bin)
-sd:/apps/vibribbon/text.bin               (build/text.bin)
+sd:/apps/vibribbon/text.bin               (build/text.bin, MAIN_G reference text)
+sd:/apps/vibribbon/text_t.bin             (build/text_t.bin, MAIN_T reference text)
 sd:/apps/vibribbon/disc/Vib-Ribbon (Europe) (En,Fr,De,Es,It).cue
 sd:/apps/vibribbon/disc/... (Track N).bin  all eight, as referenced by the cue
 ```
@@ -51,27 +52,36 @@ libwiiinput.
 ## Debugging
 
 The host writes `log.txt` and screenshots (`dump_*.ppm`) into the app folder,
-which makes headless Dolphin runs inspectable.
+which makes headless Dolphin runs inspectable. `make EXIT_SECONDS=N` adds a
+watchdog log, and `make PROFILE=N` samples where the CPU is, starting N seconds
+in, into `prof.bin` (pc, lr and guest pc per sample, big-endian).
 
 ## Status
 
-Builds and boots to the point of entering the runtime. Not yet playable.
+Boots with the SCPH-5552 BIOS and runs through the NanaOn-Sha logo and the intro
+to the title screen in Dolphin, at about 8 frames per second (the PS1 runs at 50).
+Not yet playable.
 
 Done:
-- Both game programs (boot loader and `MAIN_G.EXE`) recompile statically and
-  compile for PowerPC (about 2.4 MB of code).
-- OpenBIOS is recompiled and linked, so no console BIOS dump is needed.
-- Wii host layer: video out (VRAM to the TV), disc reader over SD with a CUE
-  parser, libwiiinput controller mapping, SDL shim over libogc, runtime stubs.
+- The boot loader, `MAIN_T.EXE` and `MAIN_G.EXE` recompile statically. Each is
+  partially linked into its own object and they are combined in
+  `source/wii_dispatch.c`; the two main programs share an address range, so each
+  has its own reference text for the runtime's native-code guard.
+- Byte order: guest RAM stays little-endian and the runtime's native loads and
+  CD/MDEC DMA paths byte-swap (`scripts/patch_runtime.py`).
+- Wii host layer: video out (VRAM to the TV through a YCbCr lookup table), disc
+  reader over SD with a CUE parser, libwiiinput controller mapping, SDL shim over
+  libogc, runtime stubs. The guest runs on its own thread with a 1 MB stack.
 
 Not done:
-- **Byte order.** The PS1 is little-endian, the Wii is big-endian. The runtime
-  reads guest RAM with native loads in places (`memory.c`, the SPU and VRAM
-  copy paths). Those must go through byte-swapping accessors before the game
-  can run correctly.
+- Speed. Most time goes to the runtime's cycle-exact timing model (per-dispatch
+  interrupt checks, device servicing and timed loads), not to the game code.
+- Frame pacing for when the emulation runs faster than real time.
 - Audio output (SPU to the Wii audio interface).
 - Reading CD audio tracks from a USB drive (the original's level generation),
   reusing `source/usbcd.c` from the parent project.
 - libwiiupdate self-update hook.
-- Verification on hardware or in an emulator; headless emulator runs have not
-  yet produced a game log.
+- Testing on real hardware.
+
+MEM1 is tight: the build is about 20.6 MB of the Wii's 24 MB, and it needs
+roughly 2.5 MB free for its heap. Generated code is built at `-Os` for that reason.

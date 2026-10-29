@@ -79,12 +79,23 @@ EXACT.append(("src/cdrom.c",
      "        memcpy(&val, RB_.data + RB_.pos, 4);\n"
      "#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__\n        val = __builtin_bswap32(val);\n#endif\n"
      "        RB_.pos += 4;"))
+# Several main programs load over the same RAM, each with its own reference
+# text: let the host switch the active image without resetting the guard.
+EXACT.append(("src/memory.c",
+     "void dirty_ram_text_exact_mismatch_stats(uint64_t *count,",
+     "void dirty_ram_select_text_image(uint32_t phys_lo, const uint8_t *bytes,\n"
+     "                                 uint32_t len) {\n"
+     "    text_ref_image = (uint8_t *)bytes;\n"
+     "    text_ref_lo = phys_lo;\n"
+     "    text_ref_hi = phys_lo + len;\n"
+     "}\n\n"
+     "void dirty_ram_text_exact_mismatch_stats(uint64_t *count,"))
 for rel, old, new in EXACT:
     path = f"{root}/{rel}"
     text = open(path).read()
-    if old in text:
+    if old in text and new not in text:
         open(path, "w").write(text.replace(old, new, 1))
-        print(f"patch_runtime: byte-order fix in {rel}")
+        print(f"patch_runtime: patched {rel}")
 
 changed = 0
 for rel, pat, rep in PATCHES:

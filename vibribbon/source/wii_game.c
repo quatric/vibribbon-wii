@@ -18,6 +18,9 @@
 #include "cdrom.h"
 #include "psx_scheduler.h"
 #include "wii_host.h"
+#ifdef VIB_PROFILE
+#include <tuxedo/thread.h>
+#endif
 
 #define APP_DIR   "sd:/apps/vibribbon/"
 #define BIOS_PATH APP_DIR "bios.bin"
@@ -45,27 +48,35 @@ extern void psx_icache_reset(void);
 extern void dirty_ram_register_text_image(uint32_t phys_lo, const uint8_t *bytes, uint32_t len);
 
 /* The runtime trusts recompiled code only while guest RAM still matches the
- * reference text; gen.sh builds that image from the disc (see scripts/gen.sh). */
+ * reference text; gen.sh builds one image per main program from the disc. */
+static uint8_t *load_text_image(const char *path, uint32_t *lo, uint32_t *len)
+{
+    FILE *f = fopen(path, "rb");
+    uint8_t hdr[8];
+    uint8_t *img = NULL;
+    if (f && fread(hdr, 1, 8, f) == 8) {
+        *lo  = ((uint32_t)hdr[0] << 24) | ((uint32_t)hdr[1] << 16) | ((uint32_t)hdr[2] << 8) | hdr[3];
+        *len = ((uint32_t)hdr[4] << 24) | ((uint32_t)hdr[5] << 16) | ((uint32_t)hdr[6] << 8) | hdr[7];
+        img = (uint8_t *)malloc(*len);
+        if (img && fread(img, 1, *len, f) != *len) { free(img); img = NULL; }
+    }
+    if (f) fclose(f);
+    if (!img) wii_log("%s missing or short: that program runs interpreted\n", path);
+    return img;
+}
+
 static void arm_text_guard(void)
 {
-    FILE *f = fopen(APP_DIR "text.bin", "rb");
-    uint8_t hdr[8];
-    if (!f || fread(hdr, 1, 8, f) != 8) {
-        wii_log("text.bin missing: running without the native-code guard\n");
-        if (f) fclose(f);
-        return;
+    static const char *const files[WII_MAIN_PROGS] = { APP_DIR "text.bin", APP_DIR "text_t.bin" };
+    for (int k = 0; k < WII_MAIN_PROGS; k++) {
+        uint32_t lo, len;
+        uint8_t *img = load_text_image(files[k], &lo, &len);
+        if (!img) continue;
+        wii_dispatch_set_text(k, lo, img, len);
+        if (k == 0)   /* the game runtime owns the first image's guard state */
+            dirty_ram_register_text_image(lo, img, len);
+        wii_log("text guard %d armed: phys 0x%08X len 0x%X\n", k, lo, len);
     }
-    uint32_t lo  = ((uint32_t)hdr[0] << 24) | ((uint32_t)hdr[1] << 16) | ((uint32_t)hdr[2] << 8) | hdr[3];
-    uint32_t len = ((uint32_t)hdr[4] << 24) | ((uint32_t)hdr[5] << 16) | ((uint32_t)hdr[6] << 8) | hdr[7];
-    uint8_t *img = (uint8_t *)malloc(len);
-    if (img && fread(img, 1, len, f) == len) {
-        dirty_ram_register_text_image(lo, img, len);   /* the runtime owns img now */
-        wii_log("text guard armed: phys 0x%08X len 0x%X\n", lo, len);
-    } else {
-        free(img);
-        wii_log("text.bin short read\n");
-    }
-    fclose(f);
 }
 
 extern uint64_t g_dirty_ram_insns_run;
@@ -157,15 +168,57 @@ static void on_vblank(void)
                 (unsigned)ticks_to_millisecs(now - t_last), (unsigned)ticks_to_millisecs(t_present),
                 (unsigned)(psx_get_cycle_count() / 1000000u),
                 cdrom_get_delivered_lba(), g_wii_iso_reads, g_wii_iso_fail, (unsigned)cdrom_get_burst_total());
+        {
+            extern void dirty_ram_text_exact_mismatch_stats(uint64_t *count, uint32_t out[5]);
+            uint64_t mm; uint32_t st[5];
+            dirty_ram_text_exact_mismatch_stats(&mm, st);
+            wii_log("text: mismatches %llu last range %08X+%u at %08X live %02X ref %02X\n",
+                    (unsigned long long)mm, (unsigned)st[0], (unsigned)st[1], (unsigned)st[2],
+                    (unsigned)st[3], (unsigned)st[4]);
+        }
         t_last = now; t_present = 0;
     }
 }
 
 #define GUEST_STACK_SIZE (1024 * 1024)
 
+#ifdef VIB_PROFILE
+/* Debug aid: a top-priority thread wakes every ~500 us and records where the
+ * guest thread was preempted (the kernel saves its pc/lr in the KThread).
+ * Samples go to SD as (pc, lr, guest pc) triples; symbolise them with nm on the host. */
+static KThread *volatile s_guest_kthread;
+#define PROF_SAMPLES 16384
+static uint32_t s_prof[PROF_SAMPLES][3];
+
+static void *profiler(void *arg)
+{
+    (void)arg;
+    sleep(VIB_PROFILE);                 /* skip boot; sample steady state */
+    wii_log("profile: sampling\n");
+    unsigned n = 0, idle = 0;
+    while (n < PROF_SAMPLES) {
+        usleep(500);
+        KThread *t = s_guest_kthread;
+        if (!t) continue;
+        if (t->state != KTHR_STATE_RUNNING) { idle++; continue; }
+        s_prof[n][0] = t->ctx.pc;
+        s_prof[n][1] = t->ctx.lr;
+        s_prof[n][2] = s_cpu.pc;
+        n++;
+    }
+    FILE *f = fopen(APP_DIR "prof.bin", "wb");
+    if (f) { fwrite(s_prof, sizeof(s_prof[0]), n, f); fclose(f); }
+    wii_log("profile: %u samples written, %u idle\n", n, idle);
+    return NULL;
+}
+#endif
+
 static void *guest_thread(void *arg)
 {
     (void)arg;
+#ifdef VIB_PROFILE
+    s_guest_kthread = KThreadGetSelf();
+#endif
     psx_scheduler_run(&s_cpu);
     return NULL;
 }
@@ -234,6 +287,9 @@ void wii_run_game(void)
     lwp_t guest;
     if (!stack || LWP_CreateThread(&guest, guest_thread, NULL, stack, GUEST_STACK_SIZE, 64) != 0)
         wii_fatal("could not start the guest thread");
+#ifdef VIB_PROFILE
+    { lwp_t t; LWP_CreateThread(&t, profiler, NULL, NULL, 16384, LWP_PRIO_HIGHEST); }
+#endif
     LWP_JoinThread(guest, NULL);
 
     wii_fatal("guest exited");

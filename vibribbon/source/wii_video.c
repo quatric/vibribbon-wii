@@ -12,20 +12,19 @@
 static void *s_xfb[2];
 static int s_fb;
 static GXRModeObj *s_rmode;
-static uint32_t s_ycbcr_lut[32768];   /* RGB555 -> one YCbCr pixel (Y Cb Y Cr uses pairs) */
+static uint32_t s_ycbcr_lut[32768];   /* RGB555 -> Y << 16 | Cb << 8 | Cr */
 
-static uint32_t rgb555_to_ycbcr_pair(uint16_t a, uint16_t b)
+static void build_ycbcr_lut(void)
 {
-    int r1 = (a & 31) << 3, g1 = ((a >> 5) & 31) << 3, b1 = ((a >> 10) & 31) << 3;
-    int r2 = (b & 31) << 3, g2 = ((b >> 5) & 31) << 3, b2 = ((b >> 10) & 31) << 3;
-    int y1 = (299 * r1 + 587 * g1 + 114 * b1) / 1000;
-    int y2 = (299 * r2 + 587 * g2 + 114 * b2) / 1000;
-    int r = (r1 + r2) >> 1, g = (g1 + g2) >> 1, bl = (b1 + b2) >> 1;
-    int cb = 128 + (-169 * r - 331 * g + 500 * bl) / 1000;
-    int cr = 128 + (500 * r - 419 * g - 81 * bl) / 1000;
-    if (cb < 0) cb = 0; if (cb > 255) cb = 255;
-    if (cr < 0) cr = 0; if (cr > 255) cr = 255;
-    return ((uint32_t)y1 << 24) | ((uint32_t)cb << 16) | ((uint32_t)y2 << 8) | (uint32_t)cr;
+    for (int p = 0; p < 32768; p++) {
+        int r = (p & 31) << 3, g = ((p >> 5) & 31) << 3, b = ((p >> 10) & 31) << 3;
+        int y  = (299 * r + 587 * g + 114 * b) / 1000;
+        int cb = 128 + (-169 * r - 331 * g + 500 * b) / 1000;
+        int cr = 128 + (500 * r - 419 * g - 81 * b) / 1000;
+        if (cb < 0) cb = 0; if (cb > 255) cb = 255;
+        if (cr < 0) cr = 0; if (cr > 255) cr = 255;
+        s_ycbcr_lut[p] = ((uint32_t)y << 16) | ((uint32_t)cb << 8) | (uint32_t)cr;
+    }
 }
 
 void wii_video_init(void)
@@ -41,6 +40,7 @@ void wii_video_init(void)
     VIDEO_Flush();
     VIDEO_WaitVSync();
     if (s_rmode->viTVMode & VI_NON_INTERLACE) VIDEO_WaitVSync();
+    build_ycbcr_lut();
     CON_InitEx(s_rmode, 20, 20, s_rmode->fbWidth - 40, s_rmode->xfbHeight - 40);
 }
 
@@ -93,27 +93,34 @@ void wii_fatal(const char *fmt, ...)
 
 void wii_present(const uint16_t *vram, int x, int y, int w, int h)
 {
-    static int lut_ready;
-    if (!lut_ready) lut_ready = 1;   /* pair conversion is done inline below */
+    static uint16_t sx_map[720];   /* XFB column -> PS1 column, rebuilt when the mode changes */
+    static int map_x = -1, map_w = -1;
     if (w <= 0 || h <= 0) return;
 
+    const int fw = s_rmode->fbWidth, dw = fw / 2, dh = s_rmode->xfbHeight;
+    if (x != map_x || w != map_w) {
+        for (int dx = 0; dx < fw && dx < 720; dx++)
+            sx_map[dx] = (uint16_t)((x + (dx * w) / fw) & 1023);
+        map_x = x; map_w = w;
+    }
+
+    /* The VI flips to the new XFB at the next retrace; with two buffers and a
+     * present every few frames there is no need to block on vsync here. */
     uint32_t *dst = (uint32_t *)s_xfb[s_fb ^ 1];
-    const int dw = s_rmode->fbWidth / 2;          /* pixel pairs per line */
-    const int dh = s_rmode->xfbHeight;
     for (int dy = 0; dy < dh; dy++) {
-        const int sy = y + (dy * h) / dh;
-        const uint16_t *row = vram + ((sy & 511) << 10);
-        uint32_t *out = dst + dy * (s_rmode->fbWidth / 2);
+        const uint16_t *row = vram + (((y + (dy * h) / dh) & 511) << 10);
+        uint32_t *out = dst + dy * dw;
         for (int dx = 0; dx < dw; dx++) {
-            const int sx0 = x + ((dx * 2) * w) / s_rmode->fbWidth;
-            const int sx1 = x + ((dx * 2 + 1) * w) / s_rmode->fbWidth;
-            out[dx] = rgb555_to_ycbcr_pair(row[sx0 & 1023], row[sx1 & 1023]);
+            uint32_t a = s_ycbcr_lut[row[sx_map[dx * 2]] & 0x7FFF];
+            uint32_t b = s_ycbcr_lut[row[sx_map[dx * 2 + 1]] & 0x7FFF];
+            uint32_t cb = (((a >> 8) & 0xFF) + ((b >> 8) & 0xFF)) >> 1;
+            uint32_t cr = ((a & 0xFF) + (b & 0xFF)) >> 1;
+            out[dx] = ((a >> 16) << 24) | (cb << 16) | ((b >> 16) << 8) | cr;
         }
     }
     s_fb ^= 1;
     VIDEO_SetNextFramebuffer(s_xfb[s_fb]);
     VIDEO_Flush();
-    VIDEO_WaitVSync();
 }
 
 void wii_stage(int n, const char *what)
