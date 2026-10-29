@@ -58,11 +58,24 @@ static void dma_done(void)
     s_dma_cur ^= 1;
 }
 
+#ifdef VIB_WAVDUMP
+/* Debug aid: record 6 s of output from vblank VIB_WAVDUMP on (see wii_audio_wavdump). */
+#define WAV_FRAMES (48000 * 6)
+static uint32_t *s_wav;
+static unsigned s_wav_n;
+static int s_wav_on;
+#endif
+
 static inline void push(int16_t l, int16_t r)
 {
+#ifdef VIB_WAVDUMP
+    if (s_wav_on && s_wav_n < WAV_FRAMES)
+        s_wav[s_wav_n++] = ((uint32_t)(uint16_t)l << 16) | (uint16_t)r;
+#endif
     uint32_t wr = s_wr;
     if (wr - s_rd >= RING_FRAMES) { s_dropped++; return; }
-    s_ring[wr & (RING_FRAMES - 1)] = ((uint32_t)(uint16_t)l << 16) | (uint16_t)r;
+    /* The audio interface reads big-endian pairs, right channel first. */
+    s_ring[wr & (RING_FRAMES - 1)] = ((uint32_t)(uint16_t)r << 16) | (uint16_t)l;
     s_wr = wr + 1;
 }
 
@@ -134,3 +147,43 @@ void wii_audio_init(void)
     s_dma_cur = 1;
     psx_set_midframe_audio_pump(pump);
 }
+
+#ifdef VIB_WAVDUMP
+#include <stdio.h>
+#include <stdlib.h>
+/* Called every vblank: start recording at frame VIB_WAVDUMP, write
+ * sd:/apps/vibribbon/audio.wav (48 kHz stereo, little-endian) once full. */
+void wii_audio_wavdump(unsigned frame)
+{
+    static int done;
+    if (done) return;
+    if (!s_wav_on && frame >= VIB_WAVDUMP) {
+        s_wav = malloc(WAV_FRAMES * 4);
+        s_wav_on = s_wav != NULL;
+        if (!s_wav) done = 1;
+        return;
+    }
+    if (!s_wav_on || s_wav_n < WAV_FRAMES) return;
+    done = 1;
+    s_wav_on = 0;
+    uint8_t *b = (uint8_t *)s_wav;
+    for (unsigned i = 0; i < WAV_FRAMES; i++) {     /* l,r big-endian -> l,r little-endian */
+        uint32_t v = s_wav[i];
+        b[i * 4 + 0] = (uint8_t)(v >> 16); b[i * 4 + 1] = (uint8_t)(v >> 24);
+        b[i * 4 + 2] = (uint8_t)v;         b[i * 4 + 3] = (uint8_t)(v >> 8);
+    }
+    static const uint8_t hdr_fmt[] = {
+        'f','m','t',' ', 16,0,0,0, 1,0, 2,0, 0x80,0xBB,0,0, 0x00,0xEE,0x02,0, 4,0, 16,0 };
+    uint32_t data = WAV_FRAMES * 4, riff = data + 36;
+    uint8_t hdr[44];
+    memcpy(hdr, "RIFF", 4);
+    hdr[4] = riff; hdr[5] = riff >> 8; hdr[6] = riff >> 16; hdr[7] = riff >> 24;
+    memcpy(hdr + 8, "WAVE", 4);
+    memcpy(hdr + 12, hdr_fmt, sizeof(hdr_fmt));
+    memcpy(hdr + 36, "data", 4);
+    hdr[40] = data; hdr[41] = data >> 8; hdr[42] = data >> 16; hdr[43] = data >> 24;
+    extern void wii_write_file(const char *path, const void *a, unsigned na, const void *b, unsigned nb);
+    wii_write_file("sd:/apps/vibribbon/audio.wav", hdr, sizeof(hdr), b, data);
+    free(s_wav);
+}
+#endif

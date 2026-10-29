@@ -86,6 +86,19 @@ void wii_dump_ppm(const uint16_t *vram, int x, int y, int w, int h, const char *
     LWP_MutexUnlock(s_log_lock);
 }
 
+/* Debug aid: write a file under the log lock (libfat is not thread-safe). */
+void wii_write_file(const char *path, const void *a, unsigned na, const void *b, unsigned nb)
+{
+    LWP_MutexLock(s_log_lock);
+    FILE *f = fopen(path, "wb");
+    if (f) {
+        fwrite(a, 1, na, f);
+        fwrite(b, 1, nb, f);
+        fclose(f);
+    }
+    LWP_MutexUnlock(s_log_lock);
+}
+
 void wii_fatal(const char *fmt, ...)
 {
     char msg[512];

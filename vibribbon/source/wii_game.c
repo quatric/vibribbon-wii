@@ -182,6 +182,9 @@ static void on_vblank(void)
     profile_flush();
 #endif
     s_frames = frame;
+#ifdef VIB_WAVDUMP
+    { extern void wii_audio_wavdump(unsigned frame); wii_audio_wavdump(frame); }
+#endif
     if (frame == 1)   wii_stage(9,  "first vblank");
     if (frame == 10)  wii_stage(10, "10 vblanks");
     if (frame == 120) wii_stage(11, "120 vblanks");

@@ -74,6 +74,7 @@ watchdog log, and `make PROFILE=N` samples where the CPU is, starting N seconds
 in, into `prof.bin` (pc, lr and guest pc per sample, big-endian).
 `make AUTOPLAY=900` presses Start and Cross on a schedule from frame 900, which
 takes a run through the menus into the first Bronze course.
+`make WAVDUMP=N` records 6 s of the audio output from frame N into `audio.wav`.
 
 ## Status
 
