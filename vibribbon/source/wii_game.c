@@ -137,6 +137,42 @@ static uint16_t map_buttons(uint32_t held)
 static void profile_flush(void);
 #endif
 
+#ifdef VIB_EXIT_SECONDS
+/* Debug aid: what the guest has asked of the CD drive lately. */
+static void cd_dump(void)
+{
+    static uint64_t seen_cmd, seen_sec;
+    CDROMDebugState d;
+    cdrom_debug_snapshot(&d);
+    wii_log("cd: mode %02X reading %d cmd %02X filter %u/%u muted %u xa %d stat %02X lba %d\n",
+            d.mode_reg, d.reading, d.read_cmd, d.filter_file, d.filter_channel, d.muted,
+            cdrom_xa_stream_active(), d.stat_reg, d.last_sector_lba);
+    const CDROMCommandHistoryEntry *ch;
+    uint64_t n = cdrom_debug_get_command_history(&ch);
+    uint64_t from = n > seen_cmd + 12 ? n - 12 : seen_cmd;
+    for (uint64_t i = from; i < n; i++) {
+        const CDROMCommandHistoryEntry *e = &ch[i % CDROM_COMMAND_HISTORY_CAP];
+        wii_log("  cmd #%llu f%u pc %08X k%u %02X [%02X %02X %02X] mode %02X\n",
+                (unsigned long long)i, (unsigned)e->frame, (unsigned)e->pc, e->kind, e->cmd,
+                e->params[0], e->params[1], e->params[2], e->mode);
+    }
+    seen_cmd = n;
+    const CDROMSectorHistoryEntry *sh;
+    n = cdrom_debug_get_sector_history(&sh);
+    from = n > 4 ? n - 4 : 0;
+    if (from < seen_sec && n > seen_sec) from = seen_sec;
+    for (uint64_t i = from; i < n; i++) {
+        const CDROMSectorHistoryEntry *e = &sh[i % CDROM_SECTOR_HISTORY_CAP];
+        wii_log("  sec lba %d size %d xa %u/%u sub %02X cod %02X data %u xaout %u skip %u\n",
+                e->lba, e->size, e->xa_file, e->xa_channel, e->xa_submode, e->xa_coding,
+                e->data_delivered, e->xa_audio_delivered, e->skip_reason);
+    }
+    seen_sec = n;
+}
+#endif
+
+#define PACE_QUEUED_FRAMES 4800    /* 100 ms at 48 kHz */
+
 static void on_vblank(void)
 {
     static unsigned frame;
@@ -149,14 +185,32 @@ static void on_vblank(void)
     if (frame == 10)  wii_stage(10, "10 vblanks");
     if (frame == 120) wii_stage(11, "120 vblanks");
     if (frame == 600) wii_stage(12, "600 vblanks");
+    /* Frame pacing: audio output is produced from guest time and drained in
+     * real time, so a full queue means the guest is running ahead. */
+    while (wii_audio_queued() > PACE_QUEUED_FRAMES)
+        usleep(1000);
+
     INPUT_Update();
-    sio_set_pad_state_slot(0, map_buttons(INPUT_PadsHeld()));
+    uint16_t pad = map_buttons(INPUT_PadsHeld());
+#ifdef VIB_AUTOPLAY
+    /* Debug aid for headless runs: from frame VIB_AUTOPLAY on, tap Start and
+     * then Cross every 300 frames to walk through the menus. */
+    if (frame >= VIB_AUTOPLAY) {
+        unsigned k = (frame - VIB_AUTOPLAY) % 300;
+        if (k < 6)                pad &= ~(1u << 3);    /* start */
+        if (k >= 150 && k < 156)  pad &= ~(1u << 14);   /* cross */
+    }
+#endif
+    sio_set_pad_state_slot(0, pad);
 
     GpuDisplayInfo di;
     gpu_get_display_info(&di);
     if (frame == 1 || frame % 60 == 0)
         wii_log("frame %u display %ux%u at (%u,%u) disabled=%d pc=%08X\n", frame,
                 di.width, di.height, di.display_x, di.display_y, di.disabled, s_cpu.pc);
+#ifdef VIB_EXIT_SECONDS
+    if (frame % 150 == 149) cd_dump();
+#endif
     if (frame % 300 == 299) {
         char name[64];
         snprintf(name, sizeof(name), APP_DIR "dump_%05u.ppm", frame);
@@ -175,6 +229,12 @@ static void on_vblank(void)
                 (unsigned)ticks_to_millisecs(now - t_last), (unsigned)ticks_to_millisecs(t_present),
                 (unsigned)(psx_get_cycle_count() / 1000000u),
                 cdrom_get_delivered_lba(), g_wii_iso_reads, g_wii_iso_fail, (unsigned)cdrom_get_burst_total());
+        {
+            unsigned under, drop, render_ms;
+            wii_audio_stats(&under, &drop, &render_ms);
+            wii_log("audio: queued %u underruns %u dropped %u spu %u ms\n",
+                    (unsigned)wii_audio_queued(), under, drop, render_ms);
+        }
         {
             extern void dirty_ram_text_exact_mismatch_stats(uint64_t *count, uint32_t out[5]);
             uint64_t mm; uint32_t st[5];
@@ -274,6 +334,7 @@ void wii_run_game(void)
     interrupts_init();
     sio_init();
     spu_init();
+    wii_audio_init();
     wii_stage(6, "gpu/dma/mdec/timers/irq/sio/spu init done");
     cdrom_init(DISC_CUE);
     /* GetID reports the inserted disc's licence region; this disc is PAL. */

@@ -22,6 +22,11 @@ void wii_dispatch_set_text(int prog, uint32_t lo, const uint8_t *img, uint32_t l
 /* Present the PS1 VRAM display area on the TV (called every vblank). */
 void wii_present(const uint16_t *vram_1024x512, int x, int y, int w, int h);
 
+/* SPU output (wii_audio.c): frames queued at 48 kHz, and cumulative stats. */
+void wii_audio_init(void);
+uint32_t wii_audio_queued(void);
+void wii_audio_stats(unsigned *underruns, unsigned *dropped, unsigned *render_ms);  /* render time since last call */
+
 #ifdef __cplusplus
 }
 #endif
