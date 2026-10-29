@@ -648,14 +648,47 @@ EXACT.append(("src/spu.c",
      "        psx_irq_raise(9u, u << 3);\n"
      "        spu_event_record(SPU_EV_IRQ, 0xFF, u << 3);\n"
      "    }\n"))
-# Most reverb taps land inside the work area already: skip the division.
+# Reverb work-area accesses all happen inside reverb_step, where the work
+# area and the IRQ settings can't change: take them once per step. The IRQ
+# compare is skipped when its target lies below the work area (no access can
+# reach it), and a power-of-two area wraps with a mask.
+EXACT.append(("src/spu.c",
+     "static uint32_t rev_ea(uint32_t reg_addr, int32_t bias) {\n"
+     "    uint32_t base = rev_mbase();\n"
+     "    uint32_t size = SPU_RAM_SIZE - base;\n",
+     "static uint32_t rv_base, rv_size;       /* work area for this reverb_step */\n"
+     "static int rv_irq;                      /* an access could hit the IRQ address */\n"
+     "static uint32_t rev_ea(uint32_t reg_addr, int32_t bias) {\n"
+     "    uint32_t base = rv_base;\n"
+     "    uint32_t size = rv_size;\n"))
 EXACT.append(("src/spu.c",
      "    rel %= (int32_t)size;\n"
      "    if (rel < 0) rel += (int32_t)size;\n",
      "    if ((uint32_t)rel >= size) {\n"
-     "        rel %= (int32_t)size;\n"
-     "        if (rel < 0) rel += (int32_t)size;\n"
+     "        if ((size & (size - 1u)) == 0) {\n"
+     "            rel &= (int32_t)(size - 1u);\n"
+     "        } else {\n"
+     "            rel %= (int32_t)size;\n"
+     "            if (rel < 0) rel += (int32_t)size;\n"
+     "        }\n"
      "    }\n"))
+EXACT.append(("src/spu.c",
+     "    uint32_t a = rev_ea(reg_addr, bias);\n"
+     "    spu_irq_check(a, 2u);\n",
+     "    uint32_t a = rev_ea(reg_addr, bias);\n"
+     "    if (rv_irq) spu_irq_check(a, 2u);\n"))
+EXACT.append(("src/spu.c",
+     "    int16_t  s = clamp16(v);\n"
+     "    spu_irq_check(a, 2u);\n",
+     "    int16_t  s = clamp16(v);\n"
+     "    if (rv_irq) spu_irq_check(a, 2u);\n"))
+EXACT.append(("src/spu.c",
+     "static void reverb_step(int32_t in_l, int32_t in_r, int wren) {\n",
+     "static void reverb_step(int32_t in_l, int32_t in_r, int wren) {\n"
+     "    rv_base = rev_mbase();\n"
+     "    rv_size = SPU_RAM_SIZE - rv_base;\n"
+     "    rv_irq = (RREG(0x1F801DAAu) & 0x0040u) &&\n"
+     "             ((((uint32_t)RREG(0x1F801DA4u) << 3) | 7u) >= rv_base);\n"))
 # Two debug rings fed on every dispatch (recent targets, stack-domain
 # switches); nothing reads them on the Wii.
 EXACT.append(("src/fntrace.c",
