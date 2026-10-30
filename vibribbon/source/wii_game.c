@@ -68,7 +68,8 @@ static uint8_t *load_text_image(const char *path, uint32_t *lo, uint32_t *len)
 
 static void arm_text_guard(void)
 {
-    static const char *const files[WII_MAIN_PROGS] = { APP_DIR "text.bin", APP_DIR "text_t.bin" };
+    static const char *const files[WII_MAIN_PROGS] = {
+        APP_DIR "text.bin", APP_DIR "text_t.bin", APP_DIR "text_k.bin" };
     for (int k = 0; k < WII_MAIN_PROGS; k++) {
         uint32_t lo, len;
         uint8_t *img = load_text_image(files[k], &lo, &len);

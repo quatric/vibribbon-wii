@@ -20,7 +20,7 @@ FW_REPO="https://github.com/Alexbeav/psxrecomp.git"
 FW_COMMIT="799e74c6ad347d1b292166de7e0fecc8fa6e17be"
 GAME_REPO="https://github.com/alexbeavs-ps1-ports/vib-ribbon-recomp.git"
 
-mkdir -p "$B" "$EXTRACT" "$GEN/boot" "$GEN/main" "$GEN/title"
+mkdir -p "$B" "$EXTRACT" "$GEN/boot" "$GEN/main" "$GEN/title" "$GEN/kiosk"
 
 if [ ! -d "$FW/.git" ]; then
     git clone -q "$FW_REPO" "$FW"
@@ -59,12 +59,14 @@ fi
 "$R" "$EXTRACT/SCES_028.73" --project-root "$FW" --seeds "$GAME/seeds/ghidra_funcs.txt" --out-dir "$GEN/boot" --strict >/dev/null
 "$R" "$EXTRACT/MAIN_G.EXE" --project-root "$FW" --out-dir "$GEN/main" --strict >/dev/null
 "$R" "$EXTRACT/MAIN_T.EXE" --project-root "$FW" --out-dir "$GEN/title" --strict >/dev/null
-python3 -I "$HERE/scripts/patch_gen.py" "$GEN"/boot/*_dispatch.c "$GEN"/main/*_dispatch.c "$GEN"/title/*_dispatch.c >/dev/null
+# MAIN_K (the kiosk build) is what the title's How to Play runs.
+"$R" "$EXTRACT/MAIN_K.EXE" --project-root "$FW" --out-dir "$GEN/kiosk" --strict >/dev/null
+python3 -I "$HERE/scripts/patch_gen.py" "$GEN"/boot/*_dispatch.c "$GEN"/main/*_dispatch.c "$GEN"/title/*_dispatch.c "$GEN"/kiosk/*_dispatch.c >/dev/null
 if [ "${VIB_BLOCK_CYCLES:-0}" = 1 ]; then
     # and takes interrupts at backward branches, calls and returns only
-    python3 -I "$HERE/scripts/irq_backedges.py" "$GEN"/boot/*_full_*.c "$GEN"/main/*_full_*.c "$GEN"/title/*_full_*.c
+    python3 -I "$HERE/scripts/irq_backedges.py" "$GEN"/boot/*_full_*.c "$GEN"/main/*_full_*.c "$GEN"/title/*_full_*.c "$GEN"/kiosk/*_full_*.c
     # and writes guest stores to plain RAM inline
-    python3 -I "$HERE/scripts/inline_stores.py" "$GEN"/boot/*_full_*.c "$GEN"/main/*_full_*.c "$GEN"/title/*_full_*.c
+    python3 -I "$HERE/scripts/inline_stores.py" "$GEN"/boot/*_full_*.c "$GEN"/main/*_full_*.c "$GEN"/title/*_full_*.c "$GEN"/kiosk/*_full_*.c
 fi
 
 # BIOS: the game is validated on Sony's SCPH-5552 (PAL). Pass your own dump as
@@ -100,9 +102,9 @@ EOF
 cp "$BIOS_ROM" "$B/bios.bin"
 
 # Reference text images for the runtime's native-code guard, one per main
-# program (MAIN_G and MAIN_T load at the same address): the boot loader's and
+# program (MAIN_G, MAIN_T and MAIN_K load at the same address): the boot loader's and
 # that program's text in one range, big-endian header {phys_lo, len}, then bytes.
-for pair in "MAIN_G.EXE text.bin" "MAIN_T.EXE text_t.bin"; do
+for pair in "MAIN_G.EXE text.bin" "MAIN_T.EXE text_t.bin" "MAIN_K.EXE text_k.bin"; do
 python3 -I - "$EXTRACT/SCES_028.73" "$EXTRACT/${pair% *}" "$B/${pair#* }" <<'PY'
 import struct, sys
 parts = []
@@ -128,4 +130,4 @@ for lib in libwiiinput libwiiupdate; do
 done
 make -C "$B/libwiiinput" >/dev/null
 
-echo "generated:$(ls "$GEN"/boot/*.c "$GEN"/main/*.c "$GEN"/title/*.c "$GEN"/bios/*.c | wc -l) C files in $GEN"
+echo "generated:$(ls "$GEN"/boot/*.c "$GEN"/main/*.c "$GEN"/title/*.c "$GEN"/kiosk/*.c "$GEN"/bios/*.c | wc -l) C files in $GEN"

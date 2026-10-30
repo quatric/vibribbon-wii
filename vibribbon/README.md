@@ -17,10 +17,10 @@ scripts/gen.sh "/path/to/Vib-Ribbon (Europe) (En,Fr,De,Es,It) (Track 1).bin" [/p
 make
 ```
 
-`gen.sh` reads the boot executable, `MAIN_T.EXE` (title) and `MAIN_G.EXE` (game)
-from the disc image, runs the recompiler on each, recompiles the BIOS and builds
-libwiiinput. Everything lands in `build/`. `MAIN_K.EXE` (the kiosk demo build) is
-not recompiled and would run in the runtime's interpreter. `scripts/patch_runtime.py`
+`gen.sh` reads the boot executable, `MAIN_T.EXE` (title), `MAIN_G.EXE` (game) and
+`MAIN_K.EXE` (the kiosk build, which the title's How to Play runs) from the disc
+image, runs the recompiler on each, recompiles the BIOS and builds libwiiinput.
+Everything lands in `build/`. `scripts/patch_runtime.py`
 adapts the runtime to the Wii and `scripts/patch_gen.py` the generated dispatch
 tables; both are applied by `gen.sh`.
 
@@ -58,6 +58,7 @@ sd:/apps/vibribbon/meta.xml, icon.png      (the Homebrew Channel's entry)
 sd:/apps/vibribbon/bios.bin               (build/bios.bin)
 sd:/apps/vibribbon/text.bin               (build/text.bin, MAIN_G reference text)
 sd:/apps/vibribbon/text_t.bin             (build/text_t.bin, MAIN_T reference text)
+sd:/apps/vibribbon/text_k.bin             (build/text_k.bin, MAIN_K reference text)
 sd:/apps/vibribbon/disc/Vib-Ribbon (Europe) (En,Fr,De,Es,It).cue
 sd:/apps/vibribbon/disc/... (Track N).bin  all eight, as referenced by the cue
 ```
@@ -122,6 +123,7 @@ frames per second):
 |---|---|---|
 | boot, intro, title | 50 fps | 50 fps |
 | menus | ~19 fps | 49-50 fps |
+| How to Play | | 50 fps |
 | loading | | 50 fps, ~40 fps for one transition |
 | a course | ~23 fps | 50 fps |
 
@@ -137,10 +139,10 @@ and the SPU rendered per sample while its IRQ is armed. The game's own code is
 under 10% of the time.
 
 Done:
-- The boot loader, `MAIN_T.EXE` and `MAIN_G.EXE` recompile statically. Each is
-  partially linked into its own object and they are combined in
-  `source/wii_dispatch.c`; the two main programs share an address range, so each
-  has its own reference text for the runtime's native-code guard.
+- The boot loader, `MAIN_T.EXE`, `MAIN_G.EXE` and `MAIN_K.EXE` recompile
+  statically. Each is partially linked into its own object and they are combined
+  in `source/wii_dispatch.c`; the three main programs share an address range, so
+  each has its own reference text for the runtime's native-code guard.
 - Byte order: guest RAM stays little-endian and the runtime's native loads and
   CD/MDEC DMA paths byte-swap (`scripts/patch_runtime.py`).
 - Wii host layer: video out (VRAM to the TV through a YCbCr lookup table, every

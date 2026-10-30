@@ -1,9 +1,9 @@
 /* The boot loader and the main executables it chains to (MAIN_G game, MAIN_T
  * title) are recompiled as separate programs whose dispatch tables export the
  * same entry points. The Makefile renames each program's copies (boot_*,
- * main_*, title_*); these combine them.
+ * main_*, title_*, kiosk_*); these combine them.
  *
- * MAIN_G and MAIN_T load at the same address, so each has its own reference
+ * MAIN_G, MAIN_T and MAIN_K (How to Play) load at the same address, so each has its own reference
  * text for the runtime's native-code guard. The program that matched last is
  * tried first, with its image selected; both images include the boot loader. */
 #include <stdint.h>
@@ -23,6 +23,7 @@ extern void dirty_ram_select_text_image(uint32_t phys_lo, const uint8_t *bytes, 
 PROG_DECLS(boot)
 PROG_DECLS(main)
 PROG_DECLS(title)
+PROG_DECLS(kiosk)
 
 typedef struct {
     int (*dispatch)(CPUState *cpu, uint32_t addr);
@@ -39,7 +40,7 @@ typedef struct {
                   p##_psx_game_address_in_text, \
                   p##_psx_game_is_function_entry, p##_psx_game_text_native_ok, \
                   p##_psx_game_text_native_ok_full, 0, 0, 0 }
-static MainProg s_prog[WII_MAIN_PROGS] = { PROG(main), PROG(title) };
+static MainProg s_prog[WII_MAIN_PROGS] = { PROG(main), PROG(title), PROG(kiosk) };
 static int s_cur;   /* program whose reference image is active */
 
 void wii_dispatch_set_text(int prog, uint32_t lo, const uint8_t *img, uint32_t len)
@@ -110,6 +111,7 @@ static void note_code_pages(void)
     boot_psx_game_code_ranges_each(dirty_ram_text_note_code_range);
     main_psx_game_code_ranges_each(dirty_ram_text_note_code_range);
     title_psx_game_code_ranges_each(dirty_ram_text_note_code_range);
+    kiosk_psx_game_code_ranges_each(dirty_ram_text_note_code_range);
     dirty_ram_text_code_ranges_done();
 }
 typedef struct { uint32_t addr, seq; int prog1; } OkMemo;   /* prog1: program + 1, 0 if empty */

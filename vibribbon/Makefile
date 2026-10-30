@@ -53,7 +53,7 @@ RT_CXX := gte pgxp mod_runtime mod_packages text_xlate cue_sheet disc_path disc_
 
 # Game programs: the boot loader plus the main executables the game chains to
 # (MAIN_T title, MAIN_G game). Each is partially linked into one object.
-PROGS    := boot main title
+PROGS    := boot main title kiosk
 gen_objs  = $(patsubst $(GEN)/$(1)/%.c,$(OBJ)/gen_$(1)_%.o,$(wildcard $(GEN)/$(1)/*.c))
 GEN_OBJS := $(foreach d,$(PROGS),$(OBJ)/prog_$(d).o) $(call gen_objs,bios)
 HOST_C := $(wildcard source/*.c)
