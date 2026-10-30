@@ -818,20 +818,32 @@ EXACT.append(("src/bios_hle.c",
 
 # Word stores to RAM above the kernel window: none of the BIOS-scratch,
 # Tomba card or kernel-bless cases apply there, so skip their tests (and the
-# register saves they cost) and keep only the hooks that can fire.
+# second call and register saves they cost) and keep only the hooks that can
+# fire.
 EXACT.append(("src/memory.c",
-     "    uint32_t phys = psx_phys_addr(addr);\n\n    /* The generated BIOS mirrors",
-     "    uint32_t phys = psx_phys_addr(addr);\n"
+     "static void psx_write_word_raw(uint32_t addr, uint32_t val);\nvoid psx_write_word(uint32_t addr, uint32_t val) {\n"
+     "    extern void (*g_overlay_flush_pending_cycles)(void);\n",
+     "static void psx_write_word_raw(uint32_t addr, uint32_t val);\n"
      "#ifdef PSX_WII\n"
-     "    if (phys - DIRTY_RAM_KERNEL_TRACK_BYTES < RAM_SIZE - DIRTY_RAM_KERNEL_TRACK_BYTES &&\n"
-     "        !g_card_data_writes_armed && phys != D44_PHYS) {\n"
-     "        text_guard_note_write(phys, val, 4);\n"
-     "        overlay_watch_note_write(phys, 4);\n"
-     "        uint32_t le = __builtin_bswap32(val);\n"
-     "        memcpy(&ram[phys], &le, 4);\n"
-     "        return;\n"
-     "    }\n"
-     "#endif\n\n    /* The generated BIOS mirrors"))
+     "static inline int psx_write_word_ram_fast(uint32_t addr, uint32_t val) {\n"
+     "    if (addr >= 0xC0000000u || (sr_ptr && (*sr_ptr & 0x10000u))) return 0;\n"
+     "    uint32_t phys = psx_phys_addr(addr);\n"
+     "    if (phys - DIRTY_RAM_KERNEL_TRACK_BYTES >= RAM_SIZE - DIRTY_RAM_KERNEL_TRACK_BYTES ||\n"
+     "        g_card_data_writes_armed || phys == D44_PHYS) return 0;\n"
+     "    g_guest_store_count++;\n"
+     "    text_guard_note_write(phys, val, 4);\n"
+     "    overlay_watch_note_write(phys, 4);\n"
+     "    uint32_t le = __builtin_bswap32(val);\n"
+     "    memcpy(&ram[phys], &le, 4);\n"
+     "    return 1;\n"
+     "}\n"
+     "#endif\n"
+     "void psx_write_word(uint32_t addr, uint32_t val) {\n"
+     "    extern void (*g_overlay_flush_pending_cycles)(void);\n"
+     "#ifdef PSX_WII\n"
+     "    if (!g_overlay_flush_pending_cycles && g_ls_mode == 0 && !g_ds_recording &&\n"
+     "        psx_write_word_ram_fast(addr, val)) return;\n"
+     "#endif\n"))
 
 # Nothing in the Wii build arms the parity ring or the debug server's write
 # trace: drop their calls from every guest store.
