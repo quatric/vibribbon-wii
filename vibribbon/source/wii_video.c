@@ -46,15 +46,18 @@ void wii_video_init(void)
 
 static FILE *s_logf;
 static mutex_t s_log_lock = LWP_MUTEX_NULL;   /* libfat is not thread-safe */
+static int s_console_off;   /* the game owns the screen: scrolling the console costs a frame copy */
 
 void wii_log(const char *fmt, ...)
 {
     va_list ap;
     if (s_log_lock == LWP_MUTEX_NULL) LWP_MutexInit(&s_log_lock, false);
     LWP_MutexLock(s_log_lock);
-    va_start(ap, fmt);
-    vprintf(fmt, ap);
-    va_end(ap);
+    if (!s_console_off) {
+        va_start(ap, fmt);
+        vprintf(fmt, ap);
+        va_end(ap);
+    }
     if (!s_logf) s_logf = fopen("sd:/apps/vibribbon/log.txt", "w");
     if (s_logf) {
         va_start(ap, fmt);
@@ -106,6 +109,7 @@ void wii_fatal(const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
+    s_console_off = 0;
     wii_log("\n\nFATAL: %s\n\nPress HOME to exit.\n", msg);
     for (;;) VIDEO_WaitVSync();
 }
@@ -115,6 +119,7 @@ void wii_present(const uint16_t *vram, int x, int y, int w, int h)
     static uint16_t sx_map[720];   /* XFB column -> PS1 column, rebuilt when the mode changes */
     static int map_x = -1, map_w = -1;
     if (w <= 0 || h <= 0) return;
+    s_console_off = 1;
 
     /* A display 320 to 640 pixels wide goes into an XFB of the same width and
      * the VI scales it to the screen; others are scaled here. */

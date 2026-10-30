@@ -246,6 +246,8 @@ static void on_vblank(void)
         wii_present(gpu_get_vram(), (int)di.display_x, (int)di.display_y,
                     (int)di.width, (int)di.height);
     t_present += gettime() - t0;
+#ifdef VIB_EXIT_SECONDS
+    /* Debug runs: timing and device stats every 30 frames. */
     if (frame % 30 == 0) {
         uint64_t now = gettime();
         wii_log("perf: 30 frames %u ms (present %u), cycles %uM, cd: lba %d reads %u fail %u bursts %u\n",
@@ -277,6 +279,9 @@ static void on_vblank(void)
         }
         t_last = now; t_present = 0;
     }
+#else
+    (void)t_last;
+#endif
 }
 
 #define GUEST_STACK_SIZE (1024 * 1024)
