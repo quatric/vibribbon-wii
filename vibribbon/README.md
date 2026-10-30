@@ -93,7 +93,7 @@ frames per second):
 | | default (cycle-exact) | `VIB_BLOCK_CYCLES=1` + `FAST=1` |
 |---|---|---|
 | title, waiting screens | 50 fps | 50 fps |
-| menus | ~19 fps | ~43 fps |
+| menus | ~19 fps | ~45 fps |
 | a course | ~23 fps | 50 fps |
 
 The game waits for vblank in PsyQ's `v_wait` loop for most of an idle frame;
