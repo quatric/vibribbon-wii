@@ -1013,6 +1013,67 @@ EXACT.append(("include/psx_cyc.h",
      "/* CPU data load value+timing. Full Beetle sequence for main RAM is inlined;\n",
      LOAD_FAST + "/* CPU data load value+timing. Full Beetle sequence for main RAM is inlined;\n"))
 
+# Guest stores to plain RAM, called directly from block-timed game code
+# (scripts/inline_stores.py, source/wii_store.c). A store takes the inline path only where
+# psx_write_word/half/byte would do nothing but count it and write the bytes:
+# no lockstep, recording or overlay hooks, cache not isolated, main RAM above
+# the kernel window, not wholly inside the game text the guard tracks, on a
+# page with no executed-code or overlay watch, card capture off. Everything
+# else goes to the store hook as before.
+EXACT.append(("src/memory.c",
+     "void memory_set_sr_ptr(const uint32_t *p) { sr_ptr = p; }\n",
+     "const uint32_t *g_mem_sr_ptr;\n"
+     "void memory_set_sr_ptr(const uint32_t *p) { sr_ptr = p; g_mem_sr_ptr = p; }\n"))
+EXACT.append(("src/memory.c",
+     "static uint32_t text_ref_lo = 0, text_ref_hi = 0;\n",
+     "static uint32_t text_ref_lo = 0, text_ref_hi = 0;\n"
+     "uint32_t g_text_ref_lo, g_text_ref_hi;   /* copies for the inline stores */\n"))
+PATCHES.append(("src/memory.c", r"(\n(\s*)text_ref_hi = phys_lo \+ len;\n)",
+                r"\1\2g_text_ref_lo = text_ref_lo; g_text_ref_hi = text_ref_hi;\n"))
+EXACT.append(("src/memory.c",
+     "static uint32_t overlay_watch_bitmap[DIRTY_RAM_BITMAP_WORDS];\n",
+     "uint32_t overlay_watch_bitmap[DIRTY_RAM_BITMAP_WORDS];   /* read by the inline stores */\n"))
+INLINE_STORES = """#if defined(PSX_WII) && !defined(PSX_OVERLAY_DLL_BUILD)
+extern void (*g_overlay_flush_pending_cycles)(void);
+extern volatile int g_card_data_writes_armed;
+extern const uint32_t *g_mem_sr_ptr;
+extern uint32_t g_text_ref_lo, g_text_ref_hi;
+extern uint32_t g_dirty_ram_exec_page_bitmap[];
+extern uint32_t overlay_watch_bitmap[];
+extern uint64_t g_guest_store_count;
+static inline __attribute__((always_inline)) int psx_store_inline_ok(uint32_t addr, uint32_t size,
+                                                                     uint32_t *phys_out) {
+    if (g_overlay_flush_pending_cycles || g_ls_mode != 0 || g_ds_recording ||
+        g_card_data_writes_armed || addr >= 0xC0000000u ||
+        (g_mem_sr_ptr && (*g_mem_sr_ptr & 0x10000u)))
+        return 0;
+    uint32_t phys = addr & 0x1FFFFFFFu;
+    if (phys >= 0x00800000u) return 0;
+    phys &= 0x001FFFFFu;
+    if (phys < 0x00010000u) return 0;
+    if (phys >= g_text_ref_lo && phys + size <= g_text_ref_hi) return 0;
+    uint32_t pg = phys >> 12;
+    if (((g_dirty_ram_exec_page_bitmap[pg >> 5] | overlay_watch_bitmap[pg >> 5]) >> (pg & 31u)) & 1u)
+        return 0;
+    *phys_out = phys;
+    return 1;
+}
+/* One shared function per width (source/wii_store.c), called directly from
+ * the generated code: the checks above, the write, or the store hook. */
+void psx_store_word_direct(CPUState* cpu, uint32_t addr, uint32_t val);
+void psx_store_half_direct(CPUState* cpu, uint32_t addr, uint16_t val);
+void psx_store_byte_direct(CPUState* cpu, uint32_t addr, uint8_t val);
+#define psx_store_word_inline psx_store_word_direct
+#define psx_store_half_inline psx_store_half_direct
+#define psx_store_byte_inline psx_store_byte_direct
+#endif
+
+"""
+EXACT.append(("include/psx_cyc.h",
+     "extern uint8_t psx_cyc_load_byte(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask);\n",
+     "extern uint8_t psx_cyc_load_byte(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask);\n\n"
+     + INLINE_STORES))
+
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed
 # its due cycle, after any command answered in the same pass. Advertising it

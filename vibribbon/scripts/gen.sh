@@ -63,6 +63,8 @@ python3 -I "$HERE/scripts/patch_gen.py" "$GEN"/boot/*_dispatch.c "$GEN"/main/*_d
 if [ "${VIB_BLOCK_CYCLES:-0}" = 1 ]; then
     # and takes interrupts at backward branches, calls and returns only
     python3 -I "$HERE/scripts/irq_backedges.py" "$GEN"/boot/*_full_*.c "$GEN"/main/*_full_*.c "$GEN"/title/*_full_*.c
+    # and writes guest stores to plain RAM inline
+    python3 -I "$HERE/scripts/inline_stores.py" "$GEN"/boot/*_full_*.c "$GEN"/main/*_full_*.c "$GEN"/title/*_full_*.c
 fi
 
 # BIOS: the game is validated on Sony's SCPH-5552 (PAL). Pass your own dump as
