@@ -100,9 +100,10 @@ frames per second):
 The game waits for vblank in PsyQ's `v_wait` loop for most of an idle frame,
 and for the CD in libcd's `CdSync()`/`CdReady()` and the BIOS's event loops;
 `source/wii_idle.c` skips those waits, and the BIOS's boot-time copy, clear
-and delay loops, without changing any guest-visible timing. A loop that stores or reads device registers is run once with the
-runtime watching it, and skipped only when its stores leave memory as it was and
-its device accesses change nothing. What remains in a course is the runtime's faithful model of the PS1:
+and delay loops, without changing any guest-visible timing. A loop that stores
+or reads device registers is run once with the runtime watching it, and
+skipped only when its stores leave memory as it was and its device accesses
+change nothing. What remains in a course is the runtime's faithful model of the PS1:
 per-instruction timing, a device pass per DMA packet, SIO and timer polling,
 and the SPU rendered per sample while its IRQ is armed. The game's own code is
 under 10% of the time.
@@ -122,9 +123,7 @@ Done:
 
 Not done:
 - Full speed in the cycle-exact default build, and in the one slow loading
-  transition: going into a course, the game looks up file names through a
-  string compare the recompiler splits into three functions, so every
-  character compared passes through the dispatcher.
+  transition: the 30 frames going into a course take ~0.73 s instead of 0.6 s.
 - Reading CD audio tracks from a USB drive (the original's level generation),
   reusing `source/usbcd.c` from the parent project.
 - libwiiupdate self-update hook.
