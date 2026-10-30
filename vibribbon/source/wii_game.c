@@ -123,6 +123,42 @@ static uint16_t map_buttons(uint32_t held)
     return b;
 }
 
+/* A bare Wii Remote is held sideways, D-pad on the left: its Up points left,
+ * and 1 and 2 sit under the right thumb as Cross and Circle (Vib-Ribbon
+ * plays on Left, Down, Cross and Circle, often two at once). With a Nunchuk
+ * or Classic Controller plugged in it is held upright and maps as is. Its
+ * buttons come back in the upright WPAD bits map_buttons reads. The Remote's
+ * own buttons other than HOME are read here, not through libwiiinput. */
+#define WIIMOTE_OWN (0xFFFFu & ~WPAD_BUTTON_HOME)
+
+static uint32_t wiimote_buttons(void)
+{
+    static const struct { uint32_t from, to; } sideways[] = {
+        { WPAD_BUTTON_UP,    WPAD_BUTTON_LEFT  },
+        { WPAD_BUTTON_DOWN,  WPAD_BUTTON_RIGHT },
+        { WPAD_BUTTON_LEFT,  WPAD_BUTTON_DOWN  },
+        { WPAD_BUTTON_RIGHT, WPAD_BUTTON_UP    },
+        { WPAD_BUTTON_1,     WPAD_BUTTON_A     },   /* cross    */
+        { WPAD_BUTTON_2,     WPAD_BUTTON_B     },   /* circle   */
+        { WPAD_BUTTON_A,     WPAD_BUTTON_2     },   /* triangle */
+        { WPAD_BUTTON_B,     WPAD_BUTTON_1     },   /* square   */
+        { WPAD_BUTTON_PLUS,  WPAD_BUTTON_PLUS  },
+        { WPAD_BUTTON_MINUS, WPAD_BUTTON_MINUS },
+    };
+    uint32_t out = 0;
+    for (int ch = 0; ch < 4; ch++) {
+        u32 type;
+        if (WPAD_Probe(ch, &type) != WPAD_ERR_NONE) continue;
+        WPADData *wd = WPAD_Data(ch);
+        if (!wd || wd->err != WPAD_ERR_NONE) continue;
+        uint32_t h = WPAD_ButtonsHeld(ch) & WIIMOTE_OWN;
+        if (wd->exp.type != WPAD_EXP_NONE) { out |= h; continue; }
+        for (unsigned i = 0; i < sizeof(sideways) / sizeof(sideways[0]); i++)
+            if (h & sideways[i].from) out |= sideways[i].to;
+    }
+    return out;
+}
+
 #ifdef VIB_PROFILE
 static void profile_flush(void);
 #endif
@@ -184,7 +220,7 @@ static void on_vblank(void)
         usleep(1000);
 
     INPUT_Update();
-    uint32_t held = INPUT_PadsHeld();
+    uint32_t held = INPUT_PadsHeld() | wiimote_buttons();
     wii_exit_poll(held);
     uint16_t pad = map_buttons(held);
 #ifdef VIB_AUTOPLAY
@@ -347,6 +383,7 @@ void wii_run_game(void)
     wii_log("Vib-Ribbon (recompiled) starting\n");
 
     INPUT_Init();
+    for (int ch = 0; ch < 4; ch++) INPUT_IgnoreWiimoteButtons(ch, WIIMOTE_OWN);
     wii_set_wpad_power_callback();
     wii_stage(3, "libwiiinput up");
 

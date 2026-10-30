@@ -63,14 +63,28 @@ sd:/apps/vibribbon/disc/... (Track N).bin  all eight, as referenced by the cue
 
 ## Controls
 
-| Wii Remote | Action |
+A Wii Remote on its own is held sideways, D-pad on the left:
+
+| Wii Remote (sideways) | Action |
 |---|---|
-| D-pad | D-pad |
-| A / B / 1 / 2 | Cross / Circle / Square / Triangle |
+| D-pad | D-pad, as it points when held sideways |
+| 1 / 2 | Cross / Circle |
+| B / A | Square / Triangle |
 | + / - | Start / Select |
 
-Classic Controller, GameCube pads and USB keyboards map the same way through
-libwiiinput.
+With a Nunchuk or Classic Controller plugged in, the Remote is held upright:
+
+| Classic Controller, or upright Wii Remote | Action |
+|---|---|
+| D-pad | D-pad |
+| A / B / Y (1) / X (2) | Cross / Circle / Square / Triangle |
+| + / - | Start / Select |
+
+A GameCube pad maps through libwiiinput the same way: A / B / Y / X as on the
+Classic Controller, R or Z = Start, L = Select.
+
+HOME (Start on a GameCube pad) or the console's Reset button returns to the
+Homebrew Channel; the Power buttons turn the Wii off.
 
 ## Debugging
 
