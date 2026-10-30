@@ -1248,6 +1248,29 @@ EXACT.append(("src/dma.c",
      "#endif\n"
      "    for (uint32_t i = 0; i < num_entries; i++) {\n"))
 
+# Reverb taps: a tap past the end of the work area wrapped with a division
+# (the area is rarely a power of two). It is never more than one area out, so
+# one add or subtract gives the same offset; the tap helpers are inlined.
+EXACT.append(("src/spu.c",
+     "        } else {\n"
+     "            rel %= (int32_t)size;\n"
+     "            if (rel < 0) rel += (int32_t)size;\n"
+     "        }\n",
+     "        } else if (rel >= (int32_t)size && rel - (int32_t)size < (int32_t)size) {\n"
+     "            rel -= (int32_t)size;\n"
+     "        } else if (rel < 0 && rel >= -(int32_t)size) {\n"
+     "            rel += (int32_t)size;\n"
+     "        } else {\n"
+     "            rel %= (int32_t)size;\n"
+     "            if (rel < 0) rel += (int32_t)size;\n"
+     "        }\n"))
+EXACT.append(("src/spu.c", "static uint32_t rev_ea(uint32_t reg_addr, int32_t bias) {",
+     "static inline __attribute__((always_inline)) uint32_t rev_ea(uint32_t reg_addr, int32_t bias) {"))
+EXACT.append(("src/spu.c", "static int16_t rev_read(uint32_t reg_addr, int32_t bias) {",
+     "static inline __attribute__((always_inline)) int16_t rev_read(uint32_t reg_addr, int32_t bias) {"))
+EXACT.append(("src/spu.c", "static void rev_write(uint32_t reg_addr, int32_t v, int wren) {",
+     "static inline __attribute__((always_inline)) void rev_write(uint32_t reg_addr, int32_t v, int wren) {"))
+
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed
 # its due cycle, after any command answered in the same pass. Advertising it
