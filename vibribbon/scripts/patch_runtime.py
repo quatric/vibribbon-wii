@@ -825,7 +825,6 @@ EXACT.append(("src/memory.c",
      "#ifdef PSX_WII\n"
      "    if (phys - DIRTY_RAM_KERNEL_TRACK_BYTES < RAM_SIZE - DIRTY_RAM_KERNEL_TRACK_BYTES &&\n"
      "        !g_card_data_writes_armed && phys != D44_PHYS) {\n"
-     "        parity_trace_note_write(phys, 4, effective_store_pc());\n"
      "        text_guard_note_write(phys, val, 4);\n"
      "        overlay_watch_note_write(phys, 4);\n"
      "        uint32_t le = __builtin_bswap32(val);\n"
@@ -833,6 +832,16 @@ EXACT.append(("src/memory.c",
      "        return;\n"
      "    }\n"
      "#endif\n\n    /* The generated BIOS mirrors"))
+
+# Nothing in the Wii build arms the parity ring or the debug server's write
+# trace: drop their calls from every guest store.
+EXACT.append(("src/memory.c",
+     "extern void parity_trace_note_write(uint32_t addr, uint32_t width, uint32_t writer_pc);\n",
+     "extern void parity_trace_note_write(uint32_t addr, uint32_t width, uint32_t writer_pc);\n"
+     "#ifdef PSX_WII\n"
+     "#define parity_trace_note_write(a, w, pc) ((void)0)\n"
+     "#define debug_server_trace_write_check(p, o, n, w) ((void)0)\n"
+     "#endif\n"))
 
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed
