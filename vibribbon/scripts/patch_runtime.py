@@ -1563,6 +1563,28 @@ EXACT.append(("src/overlay_loader.c",
     "        extern uint8_t  psx_cyc_load_byte(CPUState*, uint32_t, uint32_t, uint32_t);\n",
     "        extern uint8_t  (psx_cyc_load_byte)(CPUState*, uint32_t, uint32_t, uint32_t);\n"))
 
+# GetID on an audio CD: a real drive answers with an error and the "audio
+# disc" flag (stat|IdError, 90h, then zeros), not a licence string. Vib-Ribbon
+# tells a music CD from its own disc this way.
+EXACT.append(("src/cdrom.c",
+    "    case 0x1A: { /* GetID result */\n"
+    "        if (!has_disc()) {\n"
+    "            response_push(stat_reg | CDSTAT_IDERROR);\n"
+    "            response_push(0x80);\n"
+    "            set_irq(CDIRQ_ERROR);\n"
+    "        } else {\n",
+    "    case 0x1A: { /* GetID result */\n"
+    "        if (!has_disc()) {\n"
+    "            response_push(stat_reg | CDSTAT_IDERROR);\n"
+    "            response_push(0x80);\n"
+    "            set_irq(CDIRQ_ERROR);\n"
+    "        } else if (iso_track_count(iso_handle) >= 1 && iso_track_is_audio(iso_handle, 1)) {\n"
+    "            response_push(stat_reg | CDSTAT_IDERROR);\n"
+    "            response_push(0x90);\n"
+    "            for (int i = 0; i < 6; i++) response_push(0x00);\n"
+    "            set_irq(CDIRQ_ERROR);\n"
+    "        } else {\n"))
+
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed
 # its due cycle, after any command answered in the same pass. Advertising it

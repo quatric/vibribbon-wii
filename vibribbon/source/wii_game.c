@@ -219,8 +219,26 @@ static void on_vblank(void)
     while (wii_audio_queued() > PACE_QUEUED_FRAMES)
         usleep(1000);
 
+    /* A music CD put in (or taken out of) the USB drive is swapped in as if
+     * through the PlayStation's lid; the game disc goes back when it is out. */
+    switch (wii_usbcd_take_event()) {
+    case WII_USBCD_INSERTED:
+        if (cdrom_replace_disc(WII_USBCD_PATH, NULL)) wii_log("disc: music CD from the USB drive\n");
+        break;
+    case WII_USBCD_REMOVED:
+        if (cdrom_replace_disc(DISC_CUE, NULL)) wii_log("disc: back to the game disc\n");
+        break;
+    }
+#ifdef VIB_DISC_SWAP_AT
+    /* Test builds: swap in an audio-only image at this frame, as the USB drive would. */
+    if (frame == VIB_DISC_SWAP_AT && cdrom_replace_disc(APP_DIR "disc/music_test.cue", NULL))
+        wii_log("disc: test music CD\n");
+#endif
     INPUT_Update();
     uint32_t held = INPUT_PadsHeld() | wiimote_buttons();
+#ifdef VIB_HOME_AT
+    if (frame >= VIB_HOME_AT) held |= WPAD_BUTTON_HOME;   /* test builds: press HOME */
+#endif
     wii_exit_poll(held);
     uint16_t pad = map_buttons(held);
 #ifdef VIB_AUTOPLAY
@@ -234,6 +252,15 @@ static void on_vblank(void)
         unsigned k = (frame - VIB_AUTOPLAY) % 300;
         if (k < 6)                pad &= ~(1u << 3);    /* start */
         if (k >= 150 && k < 156)  pad &= ~(1u << 14);   /* cross */
+    }
+#endif
+#ifdef VIB_KEYS
+    /* Test builds: press PS1 pad bits from a schedule of {frame, bit, frames
+     * held}, e.g. -DVIB_KEYS=2000,6,6,2100,14,6 for Down then Cross. */
+    {
+        static const unsigned keys[] = { VIB_KEYS };
+        for (unsigned i = 0; i + 2 < sizeof(keys) / sizeof(keys[0]); i += 3)
+            if (frame >= keys[i] && frame < keys[i] + keys[i + 2]) pad &= ~(1u << keys[i + 1]);
     }
 #endif
     sio_set_pad_state_slot(0, pad);
@@ -256,7 +283,10 @@ static void on_vblank(void)
 #endif
 #ifdef VIB_SCREENSHOTS
     /* Test builds: a screenshot every 300 frames (the write takes ~100 ms). */
-    if (frame % 300 == 299) {
+#ifndef VIB_SHOT_EVERY
+#define VIB_SHOT_EVERY 300
+#endif
+    if (frame % VIB_SHOT_EVERY == VIB_SHOT_EVERY - 1) {
         char name[64];
         snprintf(name, sizeof(name), APP_DIR "dump_%05u.ppm", frame);
         wii_dump_ppm(gpu_get_vram(), (int)di.display_x, (int)di.display_y,
@@ -368,6 +398,8 @@ static void profile_flush(void)
 }
 #endif
 
+static volatile int s_guest_done;
+
 static void *guest_thread(void *arg)
 {
     (void)arg;
@@ -375,6 +407,7 @@ static void *guest_thread(void *arg)
     s_guest_kthread = KThreadGetSelf();
 #endif
     psx_scheduler_run(&s_cpu);
+    s_guest_done = 1;
     return NULL;
 }
 
@@ -458,7 +491,10 @@ void wii_run_game(void)
 #ifdef VIB_PROFILE
     { lwp_t t; LWP_CreateThread(&t, profiler, NULL, NULL, 16384, LWP_PRIO_HIGHEST); }
 #endif
-    LWP_JoinThread(guest, NULL);
-
+    /* The main thread waits here and does the exit when one is asked for. */
+    while (!s_guest_done) {
+        usleep(20000);
+        wii_exit_poll(0);
+    }
     wii_fatal("guest exited");
 }

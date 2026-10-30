@@ -54,12 +54,23 @@ speed in Dolphin.
 
 ```
 sd:/apps/vibribbon/boot.dol
+sd:/apps/vibribbon/meta.xml, icon.png      (the Homebrew Channel's entry)
 sd:/apps/vibribbon/bios.bin               (build/bios.bin)
 sd:/apps/vibribbon/text.bin               (build/text.bin, MAIN_G reference text)
 sd:/apps/vibribbon/text_t.bin             (build/text_t.bin, MAIN_T reference text)
 sd:/apps/vibribbon/disc/Vib-Ribbon (Europe) (En,Fr,De,Es,It).cue
 sd:/apps/vibribbon/disc/... (Track N).bin  all eight, as referenced by the cue
 ```
+
+## Your own music CDs
+
+Vib-Ribbon builds courses from any audio CD. Plug a USB CD/DVD drive into the
+Wii (the WiiCD player's driver, `../source/usbcd.c`, reads it), choose *Play
+with my own choice of CD* and put the CD in the USB drive when the game asks:
+it goes in as if through the PlayStation's lid. Taking it out puts the
+Vib-Ribbon disc back. A CD that is already in the drive when the game starts is
+not used until it is taken out and put back, so the game boots from its own
+disc. The Wii's own drive cannot read CDs.
 
 ## Controls
 
@@ -95,6 +106,9 @@ in, into `prof.bin` (pc, lr and guest pc per sample, big-endian).
 `make AUTOPLAY=900` presses Start and Cross on a schedule from frame 900, which
 takes a run through the menus into the first Bronze course.
 `make WAVDUMP=N` records 6 s of the audio output from frame N into `audio.wav`.
+Test builds also take `SHOT_EVERY=N` (screenshot interval), `KEYS=frame,bit,frames,...`
+(PS1 pad presses on a schedule), `DISC_SWAP_AT=N` (swap in `disc/music_test.cue`,
+an audio-only image, as a USB music CD would be) and `HOME_AT=N` (press HOME).
 
 ## Status
 

@@ -13,7 +13,9 @@ void wii_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void wii_run_game(void);
 /* HOME, the console's Reset button: back to the loader; Power: power off. */
 void wii_exit(int power_off) __attribute__((noreturn));
-void wii_exit_poll(uint32_t held_buttons);   /* call once per frame */
+/* Call once per frame: on the main thread it exits; any other thread parks
+ * there for the main thread to exit. */
+void wii_exit_poll(uint32_t held_buttons);
 void wii_set_wpad_power_callback(void);
 void wii_stage(int n, const char *what);   /* log a bring-up stage; powers off at VIB_STOP_AT */
 void wii_dump_ppm(const uint16_t *vram, int x, int y, int w, int h, const char *path);
@@ -26,6 +28,17 @@ void wii_dispatch_set_text(int prog, uint32_t lo, const uint8_t *img, uint32_t l
 
 /* Present the PS1 VRAM display area on the TV (called every vblank). */
 void wii_present(const uint16_t *vram_1024x512, int x, int y, int w, int h);
+
+/* A USB CD drive as the PlayStation's (wii_usbcd.c): iso_open(WII_USBCD_PATH)
+ * mounts the music CD in it. The frame hook takes the drive's events and
+ * swaps discs. */
+#define WII_USBCD_PATH     "usbcd:"
+#define WII_USBCD_INSERTED 1
+#define WII_USBCD_REMOVED  2
+void wii_usbcd_init(void);
+void wii_usbcd_shutdown(void);
+int  wii_usbcd_take_event(void);
+int  wii_usbcd_read(uint32_t lba, uint8_t *out_2352);
 
 /* SPU output (wii_audio.c): frames queued at 48 kHz, and cumulative stats. */
 void wii_audio_init(void);

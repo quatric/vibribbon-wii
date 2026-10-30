@@ -25,8 +25,8 @@ LIBOGC := /opt/devkitpro/libogc
 SCREENSHOTS ?= $(if $(EXIT_SECONDS),1,0)
 
 MACH := -mrvl -mcpu=750 -meabi -mhard-float
-DEFS := -DPSX_NO_DEBUG_TOOLS -DPSX_WII=1 -DPSX_NATIVE_BUILD=1 -DPSX_ENABLE_BLOCK_CYCLES=1 -DPSX_HAS_GAME_DISPATCH=1 $(if $(EXIT_SECONDS),-DVIB_EXIT_SECONDS=$(EXIT_SECONDS)) $(if $(STOP_AT),-DVIB_STOP_AT=$(STOP_AT)) $(if $(PROFILE),-DVIB_PROFILE=$(PROFILE)) $(if $(AUTOPLAY),-DVIB_AUTOPLAY=$(AUTOPLAY)) $(if $(AUTOPLAY_END),-DVIB_AUTOPLAY_END=$(AUTOPLAY_END)) $(if $(FAST),-DVIB_FAST=1) $(if $(filter 1,$(SCREENSHOTS)),-DVIB_SCREENSHOTS=1) $(if $(WAVDUMP),-DVIB_WAVDUMP=$(WAVDUMP))
-INC  := -Isource/shim -Isource -I$(RT)/include -I$(GEN)/main -I$(FW)/recompiler/src -I$(FW)/recompiler/lib/toml11 \
+DEFS := -DPSX_NO_DEBUG_TOOLS -DPSX_WII=1 -DPSX_NATIVE_BUILD=1 -DPSX_ENABLE_BLOCK_CYCLES=1 -DPSX_HAS_GAME_DISPATCH=1 $(if $(EXIT_SECONDS),-DVIB_EXIT_SECONDS=$(EXIT_SECONDS)) $(if $(STOP_AT),-DVIB_STOP_AT=$(STOP_AT)) $(if $(PROFILE),-DVIB_PROFILE=$(PROFILE)) $(if $(AUTOPLAY),-DVIB_AUTOPLAY=$(AUTOPLAY)) $(if $(AUTOPLAY_END),-DVIB_AUTOPLAY_END=$(AUTOPLAY_END)) $(if $(FAST),-DVIB_FAST=1) $(if $(filter 1,$(SCREENSHOTS)),-DVIB_SCREENSHOTS=1) $(if $(WAVDUMP),-DVIB_WAVDUMP=$(WAVDUMP)) $(if $(DISC_SWAP_AT),-DVIB_DISC_SWAP_AT=$(DISC_SWAP_AT)) $(if $(SHOT_EVERY),-DVIB_SHOT_EVERY=$(SHOT_EVERY)) $(if $(KEYS),-DVIB_KEYS=$(KEYS)) $(if $(HOME_AT),-DVIB_HOME_AT=$(HOME_AT))
+INC  := -Isource/shim -Isource -I../source -I$(RT)/include -I$(GEN)/main -I$(FW)/recompiler/src -I$(FW)/recompiler/lib/toml11 \
         -I$(BUILD)/libwiiinput/include -I$(LIBOGC)/include -I/opt/devkitpro/portlibs/ppc/include -I/opt/devkitpro/portlibs/wii/include
 OPT      ?= -O3
 GEN_OPT  ?= -O2
@@ -61,7 +61,7 @@ HOST_C := $(wildcard source/*.c)
 OBJS := $(addprefix $(OBJ)/rt_,$(addsuffix .o,$(RT_C))) \
         $(addprefix $(OBJ)/rt_,$(addsuffix .o,$(RT_CXX))) \
         $(GEN_OBJS) \
-        $(patsubst source/%.c,$(OBJ)/host_%.o,$(HOST_C))
+        $(patsubst source/%.c,$(OBJ)/host_%.o,$(HOST_C)) $(OBJ)/host_usbcd.o
 
 .SECONDEXPANSION:
 .PHONY: all clean
@@ -81,6 +81,9 @@ $(OBJ)/rt_%.o: $(RT)/src/%.c | $(OBJ)
 $(OBJ)/rt_%.o: $(RT)/src/%.cpp | $(OBJ)
 	$(CXX) $(CXXFLAGS) $(LTO) -c $< -o $@
 $(OBJ)/host_%.o: source/%.c | $(OBJ)
+	$(CC) $(CFLAGS) $(LTO) -c $< -o $@
+# The USB CD driver is the WiiCD player's.
+$(OBJ)/host_usbcd.o: ../source/usbcd.c ../source/usbcd.h | $(OBJ)
 	$(CC) $(CFLAGS) $(LTO) -c $< -o $@
 
 # generated code: boot / main / bios each include their own decls header. The

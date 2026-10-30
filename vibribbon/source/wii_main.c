@@ -18,6 +18,7 @@ int main(int argc, char **argv)
         memset(__mem2_start, 0, (size_t)(__mem2_end - __mem2_start));
         DCFlushRange(__mem2_start, (u32)(__mem2_end - __mem2_start));
     }
+    wii_usbcd_init();   /* takes its USB buffers from the top of MEM2 first */
     SYS_STDIO_Report(true);
     VIDEO_Init();
     wii_video_init();

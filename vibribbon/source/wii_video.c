@@ -30,15 +30,21 @@ static void build_ycbcr_lut(void)
     }
 }
 
-/* The console's Reset and Power buttons and a Wii Remote's power button only
- * set a flag here (they run in interrupt context); wii_exit_poll acts on it. */
+/* HOME, the console's Reset and Power buttons and a Wii Remote's power button
+ * only set a flag (the buttons' callbacks run in interrupt context). The exit
+ * itself runs on the main thread once the guest thread has parked: leaving
+ * from the guest thread with the Wii Remotes and USB still open hung on the
+ * way back to the Homebrew Channel. */
 static volatile int s_exit_req;   /* 1 back to the loader, 2 power off */
+static volatile int s_guest_parked;
+static lwp_t s_main_thread;
 static void on_reset(u32 irq, void *ctx) { (void)irq; (void)ctx; s_exit_req = 1; }
 static void on_power(void) { s_exit_req = 2; }
 static void on_wpad_power(s32 chan) { (void)chan; s_exit_req = 2; }
 
 void wii_video_init(void)
 {
+    s_main_thread = LWP_GetSelf();
     SYS_SetResetCallback(on_reset);
     SYS_SetPowerCallback(on_power);
     s_rmode = VIDEO_GetPreferredMode(NULL);
@@ -216,18 +222,25 @@ void wii_fatal(const char *fmt, ...)
     }
 }
 
-/* Leave for the loader (the Homebrew Channel), or power off: silence the
- * audio, write out the log and unmount the SD card first. */
+/* Leave for the loader (the Homebrew Channel), or power off, from the main
+ * thread: wait for the guest to park, then close what is open, as the WiiCD
+ * player does, and return through exit(). */
 void wii_exit(int power_off)
 {
+    for (int i = 0; i < 50 && !s_guest_parked; i++) usleep(10000);
     AUDIO_StopDMA();
     VIDEO_SetBlack(true);
     VIDEO_Flush();
+    INPUT_Shutdown();      /* the Wii Remotes (WPAD_Shutdown), GameCube adapter, USB keyboard and mouse */
+    wii_usbcd_shutdown();
+    wii_log("exit: devices closed (guest %s), %s\n", s_guest_parked ? "parked" : "running",
+            power_off ? "powering off" :
+            *(volatile uint32_t *)0x80001804 == 0x53545542u ? "back to the loader" : "no loader stub: to the system menu");
     log_flush();
     LWP_MutexLock(s_log_lock);
     if (s_logf) { fclose(s_logf); s_logf = NULL; }
     fatUnmount("sd:");
-    VIDEO_WaitVSync();
+    LWP_MutexUnlock(s_log_lock);
     if (power_off) SYS_ResetSystem(SYS_POWEROFF, 0, 0);
     exit(0);
 }
@@ -239,8 +252,11 @@ void wii_set_wpad_power_callback(void)
 
 void wii_exit_poll(uint32_t held)
 {
-    if (held & WPAD_BUTTON_HOME) s_exit_req = 1;
-    if (s_exit_req) wii_exit(s_exit_req == 2);
+    if (held & WPAD_BUTTON_HOME && !s_exit_req) s_exit_req = 1;
+    if (!s_exit_req) return;
+    if (LWP_GetSelf() == s_main_thread) wii_exit(s_exit_req == 2);
+    s_guest_parked = 1;    /* the main thread takes it from here */
+    for (;;) usleep(100000);
 }
 
 void wii_present(const uint16_t *vram, int x, int y, int w, int h)

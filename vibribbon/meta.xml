@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<app version="1">
+	<name>Vib-Ribbon</name>
+	<coder>quatric</coder>
+	<version>0.1.0</version>
+	<release_date>20261030000000</release_date>
+	<short_description>The PAL PlayStation game, recompiled for the Wii</short_description>
+	<long_description>Vib-Ribbon (Europe), statically recompiled to C and run on the PSXRecomp runtime.
+
+Needs your own disc image and BIOS in sd:/apps/vibribbon/ (see the README).
+
+Play with your own music: plug a USB CD/DVD drive into the Wii and put an audio CD in it when the game asks for one. Take it out to go back to the Vib-Ribbon disc.
+
+HOME returns to the Homebrew Channel.</long_description>
+	<ahb_access/>
+</app>

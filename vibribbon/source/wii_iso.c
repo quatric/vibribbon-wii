@@ -8,7 +8,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "usbcd.h"
 #include "wii_host.h"
+
+extern int wii_usbcd_toc(cd_toc_t *out);
 
 #define MAX_SEG 100
 #define MAX_TRK 100
@@ -33,6 +36,7 @@ typedef struct {
     trk_t trk[MAX_TRK + 1];
     int ntrk;
     uint32_t total;
+    int usb;            /* the music CD in the USB drive (wii_usbcd.c) */
 } disc_t;
 
 static int parse_msf(const char *s, uint32_t *out)
@@ -59,6 +63,21 @@ void *iso_open(const char *path)
 {
     disc_t *d = (disc_t *)calloc(1, sizeof(*d));
     if (!d) return NULL;
+
+    if (!strcmp(path, WII_USBCD_PATH)) {
+        static cd_toc_t toc;
+        if (!wii_usbcd_toc(&toc) || toc.count < 1) { free(d); return NULL; }
+        d->usb = 1;
+        for (int i = 0; i < toc.count; i++) {
+            int n = toc.tracks[i].number;
+            if (n < 1 || n > MAX_TRK) continue;
+            d->trk[n].audio = !TRACK_IS_DATA(&toc.tracks[i]);
+            d->trk[n].start = d->trk[n].pregap = toc.tracks[i].lba;
+            if (n > d->ntrk) d->ntrk = n;
+        }
+        d->total = toc.leadout;
+        return d;
+    }
 
     size_t plen = strlen(path);
     int is_cue = plen > 4 && strcasecmp(path + plen - 4, ".cue") == 0;
@@ -155,6 +174,7 @@ int iso_read_sector(void *h, uint32_t lba, uint8_t *buf, int size)
 {
     (void)size;
     disc_t *d = (disc_t *)h;
+    if (d && d->usb) { g_wii_iso_fail++; return 0; }   /* audio only: no data sectors */
     seg_t *s = d ? find_seg(d, lba) : NULL;
     if (g_wii_iso_reads++ < 64) wii_log("iso: read lba %u\n", (unsigned)lba);
     if (!s) { g_wii_iso_fail++; return 0; }
@@ -167,6 +187,10 @@ int iso_read_sector(void *h, uint32_t lba, uint8_t *buf, int size)
 int iso_read_raw_sector(void *h, uint32_t lba, uint8_t *buf, int size)
 {
     disc_t *d = (disc_t *)h;
+    if (d && d->usb) {
+        if (size < 2352 || lba >= d->total || !wii_usbcd_read(lba, buf)) { g_wii_iso_fail++; return 0; }
+        return 1;
+    }
     seg_t *s = d ? find_seg(d, lba) : NULL;
     if (g_wii_iso_reads++ < 64) wii_log("iso: read lba %u\n", (unsigned)lba);
     if (!s || size < 2352 || !s->raw) { g_wii_iso_fail++; return 0; }
