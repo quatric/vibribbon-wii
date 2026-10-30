@@ -855,6 +855,35 @@ EXACT.append(("src/memory.c",
      "#define debug_server_trace_write_check(p, o, n, w) ((void)0)\n"
      "#endif\n"))
 
+# Voice loop: only voices active at the start of a block can produce samples
+# in it (key-on is a register write, never mid-render), and only voices with a
+# volume in sweep mode step a sweep envelope. Walk just those, in voice order.
+EXACT.append(("src/spu.c",
+     "    int voice_sum_pos = 0;\n",
+     "    int voice_sum_pos = 0;\n"
+     "    uint32_t act_mask = 0, sweep_mask = 0;\n"
+     "    for (int v = 0; v < SPU_VOICE_COUNT; v++) {\n"
+     "        if (voices[v].active) act_mask |= 1u << v;\n"
+     "        if ((voice_reg(v, 0) | voice_reg(v, 1)) & 0x8000u) sweep_mask |= 1u << v;\n"
+     "    }\n"
+     "    if (s_shadow_tap_on) act_mask = (1u << SPU_VOICE_COUNT) - 1u;\n"))
+EXACT.append(("src/spu.c",
+     "            if (any_voice) {\n"
+     "                for (int v = 0; v < SPU_VOICE_COUNT; v++) {\n"
+     "                    sweep_env_step(&sweep_voice_env[v][0], voice_reg(v, 0));\n",
+     "            if (any_voice) {\n"
+     "                for (uint32_t m = sweep_mask; m; m &= m - 1u) {\n"
+     "                    int v = __builtin_ctz(m);\n"
+     "                    sweep_env_step(&sweep_voice_env[v][0], voice_reg(v, 0));\n"))
+EXACT.append(("src/spu.c",
+     "            if (any_voice) {\n"
+     "                for (int v = 0; v < SPU_VOICE_COUNT; v++) {\n"
+     "                    int16_t s = voice_next_sample(v);\n",
+     "            if (any_voice) {\n"
+     "                for (uint32_t m = act_mask; m; m &= m - 1u) {\n"
+     "                    int v = __builtin_ctz(m);\n"
+     "                    int16_t s = voice_next_sample(v);\n"))
+
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed
 # its due cycle, after any command answered in the same pass. Advertising it
