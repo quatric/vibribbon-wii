@@ -90,6 +90,7 @@ fi
 rm -f "$GEN"/bios/*.c
 mkdir -p "$GEN/bios"
 cp "$FW"/generated/"$BIOS_STEM"_*.c "$GEN/bios/"
+python3 -I "$HERE/scripts/patch_gen.py" "$GEN"/bios/*_dispatch.c >/dev/null
 cat > "$GEN/bios/bios_registry.c" <<EOF
 #include "psx_bios_backend.h"
 extern const PsxBiosBackend ${BIOS_STEM}_psx_bios_backend;

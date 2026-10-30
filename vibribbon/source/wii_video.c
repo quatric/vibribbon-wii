@@ -44,25 +44,85 @@ void wii_video_init(void)
     CON_InitEx(s_rmode, 20, 20, s_rmode->fbWidth - 40, s_rmode->xfbHeight - 40);
 }
 
+/* The log goes to SD from a writer thread below the guest's priority: a write
+ * with its fsync takes most of a millisecond, which the guest thread would
+ * otherwise spend on every line. Lines wait in a ring until the guest idles. */
 static FILE *s_logf;
 static mutex_t s_log_lock = LWP_MUTEX_NULL;   /* libfat is not thread-safe */
+static mutex_t s_ring_lock = LWP_MUTEX_NULL;
+static sem_t s_log_sem = LWP_SEM_NULL;
 static int s_console_off;   /* the game owns the screen: scrolling the console costs a frame copy */
+#define LOG_RING (64 * 1024)
+static char s_ring[LOG_RING];
+static unsigned s_ring_rd, s_ring_wr, s_ring_lost;   /* free-running byte counts */
+
+/* Write out what the ring holds; the caller holds s_log_lock. */
+static void log_drain(void)
+{
+    static char chunk[4096];
+    for (;;) {
+        LWP_MutexLock(s_ring_lock);
+        unsigned n = s_ring_wr - s_ring_rd;
+        if (n > sizeof(chunk)) n = sizeof(chunk);
+        for (unsigned i = 0; i < n; i++) chunk[i] = s_ring[(s_ring_rd + i) % LOG_RING];
+        s_ring_rd += n;
+        LWP_MutexUnlock(s_ring_lock);
+        if (!n) return;
+        if (!s_logf) s_logf = fopen("sd:/apps/vibribbon/log.txt", "w");
+        if (s_logf) fwrite(chunk, 1, n, s_logf);
+    }
+}
+
+static void *log_writer(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        LWP_SemWait(s_log_sem);
+        LWP_MutexLock(s_log_lock);
+        log_drain();
+        if (s_logf) {
+            fflush(s_logf);
+            fsync(fileno(s_logf));
+        }
+        LWP_MutexUnlock(s_log_lock);
+    }
+    return NULL;
+}
 
 void wii_log(const char *fmt, ...)
 {
+    char line[512];
     va_list ap;
-    if (s_log_lock == LWP_MUTEX_NULL) LWP_MutexInit(&s_log_lock, false);
-    LWP_MutexLock(s_log_lock);
-    if (!s_console_off) {
-        va_start(ap, fmt);
-        vprintf(fmt, ap);
-        va_end(ap);
+    if (s_log_lock == LWP_MUTEX_NULL) {
+        lwp_t t;
+        LWP_MutexInit(&s_log_lock, false);
+        LWP_MutexInit(&s_ring_lock, false);
+        LWP_SemInit(&s_log_sem, 0, 0x7FFFFFFF);
+        LWP_CreateThread(&t, log_writer, NULL, NULL, 16384, 32);   /* the guest runs at 64 */
     }
-    if (!s_logf) s_logf = fopen("sd:/apps/vibribbon/log.txt", "w");
+    va_start(ap, fmt);
+    int n = vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    if (n < 0) return;
+    if (n >= (int)sizeof(line)) n = sizeof(line) - 1;
+    if (!s_console_off) fputs(line, stdout);
+    LWP_MutexLock(s_ring_lock);
+    if (LOG_RING - (s_ring_wr - s_ring_rd) >= (unsigned)n) {
+        for (int i = 0; i < n; i++) s_ring[(s_ring_wr + i) % LOG_RING] = line[i];
+        s_ring_wr += (unsigned)n;
+    } else {
+        s_ring_lost++;
+    }
+    LWP_MutexUnlock(s_ring_lock);
+    LWP_SemPost(s_log_sem);
+}
+
+/* Write everything logged so far before returning. */
+static void log_flush(void)
+{
+    LWP_MutexLock(s_log_lock);
+    log_drain();
     if (s_logf) {
-        va_start(ap, fmt);
-        vfprintf(s_logf, fmt, ap);
-        va_end(ap);
         fflush(s_logf);
         fsync(fileno(s_logf));
     }
@@ -111,6 +171,7 @@ void wii_fatal(const char *fmt, ...)
     va_end(ap);
     s_console_off = 0;
     wii_log("\n\nFATAL: %s\n\nPress HOME to exit.\n", msg);
+    log_flush();
     for (;;) VIDEO_WaitVSync();
 }
 
@@ -192,6 +253,7 @@ void wii_stage(int n, const char *what)
 #ifdef VIB_STOP_AT
     if (n == VIB_STOP_AT) {
         wii_log("stopping at stage %d\n", n);
+        log_flush();
         if (s_logf) fclose(s_logf);
         SYS_ResetSystem(SYS_POWEROFF, 0, 0);
         for (;;) VIDEO_WaitVSync();

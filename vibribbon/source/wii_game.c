@@ -103,17 +103,6 @@ static void *watchdog(void *arg)
     return NULL;
 }
 
-/* Debug aid: sample the dispatcher through the BIOS HLE hook it calls first. */
-static int (*s_real_hook)(struct CPUState *, uint32_t);
-static int trace_hook(struct CPUState *cpu, uint32_t phys)
-{
-    static uint32_t n;
-    int r = s_real_hook ? s_real_hook(cpu, phys) : 0;
-    if ((++n & 0xFFFF) == 0 || r || n < 32)
-        wii_log("hook #%u phys=%08X ra=%08X r=%d\n", (unsigned)n, (unsigned)phys,
-                (unsigned)cpu->gpr[31], r);
-    return r;
-}
 #endif
 
 /* PS1 pad word is active low: SELECT L3 R3 START UP RIGHT DOWN LEFT
@@ -349,10 +338,6 @@ void wii_run_game(void)
         wii_fatal("no BIOS backend linked");
     wii_log("bios: %s\n", psx_bios_image.image_id ? psx_bios_image.image_id : "?");
     psx_bios_hle_configure(0, 1);   /* skip the BIOS shell intro, as the desktop's fast boot does */
-#ifdef VIB_EXIT_SECONDS
-    s_real_hook = g_psx_bios_hle_hook;
-    g_psx_bios_hle_hook = trace_hook;
-#endif
 
     s_cpu.read_word  = psx_read_word;
     s_cpu.write_word = psx_write_word;

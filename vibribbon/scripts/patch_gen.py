@@ -10,6 +10,11 @@ It also adds psx_dispatch_game_compiled_checked, the dispatch without its
 static-code check, for a caller that has just passed that check for the same
 address, and psx_game_code_ranges_each, which reports the emitted code ranges
 (source/wii_dispatch.c).
+
+In the BIOS's dispatcher, every call and return of game code tests whether a
+target in the BIOS shell's RAM window is game text by running the native-code
+guard; the test only matters while the call is unhandled and the game-start
+route has not already taken it, so it is made to run only then.
 """
 import pathlib
 import sys
@@ -72,9 +77,22 @@ DISPATCH = """    if (entry->range_count == 0 || !dirty_ram_text_native_ok_range
     return 1;
 }"""
 
+SHELL_OLD = """        int game_text_in_shell_window =
+            game_phys >= 0x00030000u && game_phys <= 0x0005AFFFu &&"""
+SHELL_NEW = """        int game_text_in_shell_window = !found && !game_shell_overlap &&
+            game_phys >= 0x00030000u && game_phys <= 0x0005AFFFu &&"""
+
 for path in sys.argv[1:]:
     p = pathlib.Path(path)
     text = p.read_text()
+    if "psx_dispatch_impl" in text and "PSX_GAME_DISPATCH_COUNT" not in text:   # the BIOS's
+        if SHELL_OLD in text:
+            text = text.replace(SHELL_OLD, SHELL_NEW)
+        elif SHELL_NEW not in text:
+            sys.exit(f"patch_gen: {p.name}: shell-window test not found")
+        p.write_text(text)
+        print(f"patch_gen: patched {p.name}")
+        continue
     if OLD in text:
         text = text.replace(OLD, NEW)
     elif "psx_game_search_entry" not in text:

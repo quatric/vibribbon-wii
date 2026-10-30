@@ -1510,6 +1510,18 @@ EXACT.append(("src/memory.c",
     "    }\n"
     "    if (differs) {\n"))
 
+# Every BIOS-dispatched call runs fntrace_record. On the Wii only the game-start
+# latch in it has an effect; the rest feeds debug rings and traces nobody arms.
+EXACT.append(("src/fntrace.c",
+    "#ifndef PSX_WII                         /* no string translation on the Wii */\n"
+    "    text_xlate_on_dispatch(cpu, target);\n"
+    "#endif\n",
+    "#ifdef PSX_WII                          /* no string translation or traces on the Wii */\n"
+    "    if (!s_game_started && s_game_entry_phys != 0) fntrace_maybe_mark_game_started(cpu, target);\n"
+    "    return;\n"
+    "#endif\n"
+    "    text_xlate_on_dispatch(cpu, target);\n"))
+
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed
 # its due cycle, after any command answered in the same pass. Advertising it
