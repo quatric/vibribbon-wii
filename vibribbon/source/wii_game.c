@@ -312,8 +312,12 @@ static void on_vblank(void)
         uint64_t now = gettime();
         unsigned under, drop, rendered;
         wii_audio_stats(&under, &drop, &rendered);
-        wii_log("frame %u: 500 frames in %u ms, audio queued %u underruns %u\n", frame,
-                (unsigned)ticks_to_millisecs(now - t_last), (unsigned)wii_audio_queued(), under);
+        SpuDebugInfo sd;
+        spu_debug_info(&sd);
+        wii_log("frame %u: 500 frames in %u ms, audio queued %u underruns %u dropped %u, "
+                "cd audio gaps %u overflows %u, disc read failures %u\n", frame,
+                (unsigned)ticks_to_millisecs(now - t_last), (unsigned)wii_audio_queued(), under, drop,
+                (unsigned)sd.cd_underflow_frames, (unsigned)sd.cd_overflow_frames, g_wii_iso_fail);
         t_last = now;
     }
 #else

@@ -82,6 +82,10 @@ static inline void push(int16_t l, int16_t r)
     if (wr - s_rd >= RING_FRAMES) { s_dropped++; return; }
     /* The audio interface reads big-endian pairs, right channel first. */
     s_ring[wr & (RING_FRAMES - 1)] = ((uint32_t)(uint16_t)r << 16) | (uint16_t)l;
+    /* The frame must be in the ring before the DMA interrupt can see it
+     * counted: without this the compiler stores s_wr first, and an interrupt
+     * between the two stores plays a frame 8192 samples stale. */
+    __asm__ volatile("" ::: "memory");
     s_wr = wr + 1;
 }
 

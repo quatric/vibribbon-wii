@@ -180,8 +180,11 @@ int iso_read_sector(void *h, uint32_t lba, uint8_t *buf, int size)
     if (!s) { g_wii_iso_fail++; return 0; }
     uint32_t rel = lba - s->start;
     long off = s->raw ? (long)rel * 2352 + (s->mode2 ? 24 : 16) : (long)rel * 2048;
-    if (fseek(s->f, off, SEEK_SET) != 0) return 0;
-    return fread(buf, 1, 2048, s->f) == 2048;
+    for (int tries = 0; tries < 2; tries++)
+        if (fseek(s->f, off, SEEK_SET) == 0 && fread(buf, 1, 2048, s->f) == 2048)
+            return 1;
+    g_wii_iso_fail++;
+    return 0;
 }
 
 int iso_read_raw_sector(void *h, uint32_t lba, uint8_t *buf, int size)
@@ -194,8 +197,13 @@ int iso_read_raw_sector(void *h, uint32_t lba, uint8_t *buf, int size)
     seg_t *s = d ? find_seg(d, lba) : NULL;
     if (g_wii_iso_reads++ < 64) wii_log("iso: read lba %u\n", (unsigned)lba);
     if (!s || size < 2352 || !s->raw) { g_wii_iso_fail++; return 0; }
-    if (fseek(s->f, (long)(lba - s->start) * 2352, SEEK_SET) != 0) return 0;
-    return fread(buf, 1, 2352, s->f) == 2352;
+    /* A failed read is retried once; a CD-DA sector that still fails plays
+     * as 13 ms of silence, so count it. */
+    for (int tries = 0; tries < 2; tries++)
+        if (fseek(s->f, (long)(lba - s->start) * 2352, SEEK_SET) == 0 && fread(buf, 1, 2352, s->f) == 2352)
+            return 1;
+    g_wii_iso_fail++;
+    return 0;
 }
 
 int iso_read_subq(void *h, uint32_t lba, uint8_t *buf, int size, int *valid)
