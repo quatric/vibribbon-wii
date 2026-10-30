@@ -825,16 +825,17 @@ EXACT.append(("src/memory.c",
      "    extern void (*g_overlay_flush_pending_cycles)(void);\n",
      "static void psx_write_word_raw(uint32_t addr, uint32_t val);\n"
      "#ifdef PSX_WII\n"
-     "static inline int psx_write_word_ram_fast(uint32_t addr, uint32_t val) {\n"
+     "static inline __attribute__((always_inline)) int psx_write_ram_fast(uint32_t addr, uint32_t val, int size) {\n"
      "    if (addr >= 0xC0000000u || (sr_ptr && (*sr_ptr & 0x10000u))) return 0;\n"
      "    uint32_t phys = psx_phys_addr(addr);\n"
      "    if (phys - DIRTY_RAM_KERNEL_TRACK_BYTES >= RAM_SIZE - DIRTY_RAM_KERNEL_TRACK_BYTES ||\n"
-     "        g_card_data_writes_armed || phys == D44_PHYS) return 0;\n"
+     "        g_card_data_writes_armed || (size == 4 && phys == D44_PHYS)) return 0;\n"
      "    g_guest_store_count++;\n"
-     "    text_guard_note_write(phys, val, 4);\n"
-     "    overlay_watch_note_write(phys, 4);\n"
-     "    uint32_t le = __builtin_bswap32(val);\n"
-     "    memcpy(&ram[phys], &le, 4);\n"
+     "    text_guard_note_write(phys, val, size);\n"
+     "    overlay_watch_note_write(phys, (uint32_t)size);\n"
+     "    if (size == 4) { uint32_t le = __builtin_bswap32(val); memcpy(&ram[phys], &le, 4); }\n"
+     "    else if (size == 2) { ram[phys] = (uint8_t)val; ram[phys + 1] = (uint8_t)(val >> 8); }\n"
+     "    else ram[phys] = (uint8_t)val;\n"
      "    return 1;\n"
      "}\n"
      "#endif\n"
@@ -842,7 +843,7 @@ EXACT.append(("src/memory.c",
      "    extern void (*g_overlay_flush_pending_cycles)(void);\n"
      "#ifdef PSX_WII\n"
      "    if (!g_overlay_flush_pending_cycles && g_ls_mode == 0 && !g_ds_recording &&\n"
-     "        psx_write_word_ram_fast(addr, val)) return;\n"
+     "        psx_write_ram_fast(addr, val, 4)) return;\n"
      "#endif\n"))
 
 # Nothing in the Wii build arms the parity ring or the debug server's write
@@ -883,6 +884,60 @@ EXACT.append(("src/spu.c",
      "                for (uint32_t m = act_mask; m; m &= m - 1u) {\n"
      "                    int v = __builtin_ctz(m);\n"
      "                    int16_t s = voice_next_sample(v);\n"))
+
+# GTE commands never write the control registers (matrices, vectors, offsets)
+# and those round-trip exactly through export and import: keep the state
+# across commands and unpack them again only when the guest changed them.
+EXACT.append(("src/gte.cpp",
+     "static void gte_import_cpu_state(PSXRecomp::GTE::GTEState* gte,\n"
+     "                                 const CPUState* cpu) {\n",
+     "static void gte_import_cpu_state(PSXRecomp::GTE::GTEState* gte,\n"
+     "                                 const CPUState* cpu, int with_ctrl) {\n"))
+EXACT.append(("src/gte.cpp",
+     "    gte->RT[0][0] = gte_unpack_s16(c[0]);\n",
+     "    if (with_ctrl) {\n    gte->RT[0][0] = gte_unpack_s16(c[0]);\n"))
+EXACT.append(("src/gte.cpp",
+     "    gte->FLAG = c[31] & 0x7FFFF000u;\n",
+     "    }\n    gte->FLAG = c[31] & 0x7FFFF000u;\n"))
+EXACT.append(("src/gte.cpp",
+     "static void gte_export_cpu_state(CPUState* cpu,\n"
+     "                                 const PSXRecomp::GTE::GTEState* gte) {\n",
+     "static void gte_export_cpu_state(CPUState* cpu,\n"
+     "                                 const PSXRecomp::GTE::GTEState* gte, int with_ctrl) {\n"))
+EXACT.append(("src/gte.cpp",
+     "    c[0] = gte_pack_s16_pair(gte->RT[0][0], gte->RT[0][1]);\n",
+     "    if (with_ctrl) {\n    c[0] = gte_pack_s16_pair(gte->RT[0][0], gte->RT[0][1]);\n"))
+EXACT.append(("src/gte.cpp",
+     "    c[31] = gte->FLAG;\n",
+     "    }\n    c[31] = gte->FLAG;\n"))
+EXACT.append(("src/gte.cpp",
+     "    GTEState gte;\n    gte_import_cpu_state(&gte, cpu);\n",
+     "    static GTEState s_gte;\n"
+     "    static uint32_t s_gte_ctrl_seen[31];\n"
+     "    static int s_gte_ctrl_valid;\n"
+     "    GTEState& gte = s_gte;\n"
+     "    const int ctrl_changed = !s_gte_ctrl_valid ||\n"
+     "        std::memcmp(cpu->gte_ctrl, s_gte_ctrl_seen, sizeof(s_gte_ctrl_seen)) != 0;\n"
+     "    gte_import_cpu_state(&gte, cpu, ctrl_changed);\n"))
+EXACT.append(("src/gte.cpp",
+     "    gte_export_cpu_state(cpu, &gte);\n",
+     "    gte_export_cpu_state(cpu, &gte, ctrl_changed);\n"
+     "    if (ctrl_changed) {\n"
+     "        std::memcpy(s_gte_ctrl_seen, cpu->gte_ctrl, sizeof(s_gte_ctrl_seen));\n"
+     "        s_gte_ctrl_valid = 1;\n"
+     "    }\n"))
+
+# The same fast path for halfword and byte stores.
+for _fn, _ty, _sz in (("psx_write_half", "uint16_t", 2), ("psx_write_byte", "uint8_t", 1)):
+    EXACT.append(("src/memory.c",
+         "void %s(uint32_t addr, %s val) {\n"
+         "    extern void (*g_overlay_flush_pending_cycles)(void);\n" % (_fn, _ty),
+         "void %s(uint32_t addr, %s val) {\n"
+         "    extern void (*g_overlay_flush_pending_cycles)(void);\n"
+         "#ifdef PSX_WII\n"
+         "    if (!g_overlay_flush_pending_cycles && g_ls_mode == 0 && !g_ds_recording &&\n"
+         "        psx_write_ram_fast(addr, val, %d)) return;\n"
+         "#endif\n" % (_fn, _ty, _sz)))
 
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed
