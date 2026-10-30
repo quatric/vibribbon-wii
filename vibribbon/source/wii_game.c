@@ -247,16 +247,20 @@ static void on_vblank(void)
             unsigned under, drop, rendered;
             wii_audio_stats(&under, &drop, &rendered);
             extern uint64_t g_vsync_skip_count, g_vsync_skip_cycles, g_poll_skip_count, g_poll_skip_cycles,
-                            g_cdsync_skip_count, g_cdsync_skip_cycles;
+                            g_cdsync_skip_count, g_cdsync_skip_cycles,
+                            g_bios_loop_skip_count, g_bios_loop_skip_cycles;
             wii_log("audio: queued %u underruns %u dropped %u spu %u frames; vsync skips %llu (%lluM cycles)"
-                    " poll skips %llu (%lluM cycles) cdsync skips %llu (%lluM cycles)\n",
+                    " poll skips %llu (%lluM cycles) cdsync skips %llu (%lluM cycles)"
+                    " bios loop skips %llu (%lluM cycles)\n",
                     (unsigned)wii_audio_queued(), under, drop, rendered,
                     (unsigned long long)g_vsync_skip_count,
                     (unsigned long long)(g_vsync_skip_cycles / 1000000u),
                     (unsigned long long)g_poll_skip_count,
                     (unsigned long long)(g_poll_skip_cycles / 1000000u),
                     (unsigned long long)g_cdsync_skip_count,
-                    (unsigned long long)(g_cdsync_skip_cycles / 1000000u));
+                    (unsigned long long)(g_cdsync_skip_cycles / 1000000u),
+                    (unsigned long long)g_bios_loop_skip_count,
+                    (unsigned long long)(g_bios_loop_skip_cycles / 1000000u));
         }
         {
             extern void dirty_ram_text_exact_mismatch_stats(uint64_t *count, uint32_t out[5]);
