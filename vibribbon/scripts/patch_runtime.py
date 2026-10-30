@@ -1522,6 +1522,47 @@ EXACT.append(("src/fntrace.c",
     "#endif\n"
     "    text_xlate_on_dispatch(cpu, target);\n"))
 
+# Byte loads from main RAM inline in the generated code, with the same timing
+# as the word and half loads above; everything else takes the function.
+EXACT.append(("include/psx_cyc.h",
+    "#define psx_store_byte_inline psx_store_byte_direct\n"
+    "#endif\n",
+    "#define psx_store_byte_inline psx_store_byte_direct\n"
+    "#endif\n"
+    "#if defined(PSX_ENABLE_BLOCK_CYCLES) && !defined(PSX_OVERLAY_DLL_BUILD)\n"
+    "extern int g_ram_read_watch_active, g_dma_exec_depth;\n"
+    "static inline uint8_t psx_cyc_load_byte_inline(CPUState* cpu, uint32_t addr,\n"
+    "                                               uint32_t rt, uint32_t reg_mask) {\n"
+    "    uint32_t phys;\n"
+    "    if (!g_ram_read_watch_active && g_dma_exec_depth <= 0 && addr < 0xC0000000u &&\n"
+    "        g_ls_mode == 0 && !g_ls_replay_active && !g_ds_recording &&\n"
+    "        (phys = addr & 0x1FFFFFFFu) < 0x00800000u) {\n"
+    "        if (g_psx_load_delay < 0) (void)psx_load_delay_enabled();\n"
+    "        if (g_psx_load_delay && !psx_cyc_load_delay_steady(cpu, rt, reg_mask)) {\n"
+    "            psx_cyc_base(cpu);\n"
+    "            psx_cyc_deps(cpu, reg_mask);\n"
+    "            if (cpu->ld_which_t == rt) cpu->ld_which_t = 0u;\n"
+    "            psx_cyc_lds(cpu);\n"
+    "            cpu->read_absorb[cpu->read_absorb_which] = 0u;\n"
+    "            cpu->read_absorb_which = 0u;\n"
+    "            uint32_t fudge = (uint32_t)((cpu->read_fudge >> 4) & 2u);\n"
+    "            cpu->ld_absorb = 5u;\n"
+    "            psx_cyc_charge(fudge + 5u);\n"
+    "            cpu->ld_which_t = (uint8_t)rt;\n"
+    "        }\n"
+    "        return g_psx_ram[phys & 0x1FFFFFu];\n"
+    "    }\n"
+    "    return (psx_cyc_load_byte)(cpu, addr, rt, reg_mask);\n"
+    "}\n"
+    "#define psx_cyc_load_byte(c, a, r, m) psx_cyc_load_byte_inline(c, a, r, m)\n"
+    "#endif\n"))
+EXACT.append(("src/memory.c",
+    "uint8_t psx_cyc_load_byte(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {\n",
+    "uint8_t (psx_cyc_load_byte)(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask) {\n"))
+EXACT.append(("src/overlay_loader.c",
+    "        extern uint8_t  psx_cyc_load_byte(CPUState*, uint32_t, uint32_t, uint32_t);\n",
+    "        extern uint8_t  (psx_cyc_load_byte)(CPUState*, uint32_t, uint32_t, uint32_t);\n"))
+
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed
 # its due cycle, after any command answered in the same pass. Advertising it

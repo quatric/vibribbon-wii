@@ -301,7 +301,7 @@ static void *profiler(void *arg)
         if (t->state != KTHR_STATE_RUNNING) { idle++; continue; }
         s_prof[n][0] = t->ctx.pc;
         s_prof[n][1] = t->ctx.lr;
-        s_prof[n][2] = s_cpu.pc;
+        s_prof[n][2] = s_frames;
         n++;
     }
     s_prof_idle = idle;
