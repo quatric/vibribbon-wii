@@ -439,6 +439,15 @@ void wii_run_game(void)
     s_cpu.write_byte = psx_write_byte;
 
     wii_stage(4, "bios backend active");
+    {   /* memory_init exits on a missing BIOS with only a line on stderr */
+        FILE *f = fopen(BIOS_PATH, "rb");
+        long len = -1;
+        if (f) { fseek(f, 0, SEEK_END); len = ftell(f); fclose(f); }
+        if (!f)
+            wii_fatal("%s not found: copy a PlayStation BIOS image (512 KB) there", BIOS_PATH);
+        if (len != 512 * 1024)
+            wii_fatal("%s is %ld bytes, expected 524288 (a PlayStation BIOS image)", BIOS_PATH, len);
+    }
     memory_init(BIOS_PATH);
     wii_stage(5, "memory_init done");
     gpu_init();
