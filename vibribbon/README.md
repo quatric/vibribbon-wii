@@ -73,9 +73,9 @@ libwiiinput.
 
 ## Debugging
 
-The host writes `log.txt` and screenshots (`dump_*.ppm`) into the app folder,
-which makes headless Dolphin runs inspectable. `make EXIT_SECONDS=N` adds a
-watchdog log, and `make PROFILE=N` samples where the CPU is, starting N seconds
+The host writes `log.txt` into the app folder, which makes headless Dolphin
+runs inspectable. `make EXIT_SECONDS=N` adds a watchdog log and a screenshot
+(`dump_*.ppm`) every 300 frames (`SCREENSHOTS=0` leaves them out, for timing), and `make PROFILE=N` samples where the CPU is, starting N seconds
 in, into `prof.bin` (pc, lr and guest pc per sample, big-endian).
 `make AUTOPLAY=900` presses Start and Cross on a schedule from frame 900, which
 takes a run through the menus into the first Bronze course.

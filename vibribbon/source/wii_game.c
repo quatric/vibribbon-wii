@@ -227,12 +227,15 @@ static void on_vblank(void)
                 (unsigned)g.reverb_cur, (unsigned)g.capture_pos, (unsigned)g.active_mask);
     }
 #endif
+#ifdef VIB_SCREENSHOTS
+    /* Test builds: a screenshot every 300 frames (the write takes ~100 ms). */
     if (frame % 300 == 299) {
         char name[64];
         snprintf(name, sizeof(name), APP_DIR "dump_%05u.ppm", frame);
         wii_dump_ppm(gpu_get_vram(), (int)di.display_x, (int)di.display_y,
                      (int)di.width, (int)di.height, name);
     }
+#endif
     static uint64_t t_present, t_last;
     uint64_t t0 = gettime();
     if (frame == 1) t_last = t0;

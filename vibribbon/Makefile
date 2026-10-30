@@ -21,8 +21,11 @@ GEN   := $(BUILD)/gen
 OBJ   := $(BUILD)/obj
 LIBOGC := /opt/devkitpro/libogc
 
+# Screenshots every 300 frames: on in test builds (EXIT_SECONDS), SCREENSHOTS=0 to drop.
+SCREENSHOTS ?= $(if $(EXIT_SECONDS),1,0)
+
 MACH := -mrvl -mcpu=750 -meabi -mhard-float
-DEFS := -DPSX_NO_DEBUG_TOOLS -DPSX_WII=1 -DPSX_NATIVE_BUILD=1 -DPSX_ENABLE_BLOCK_CYCLES=1 -DPSX_HAS_GAME_DISPATCH=1 $(if $(EXIT_SECONDS),-DVIB_EXIT_SECONDS=$(EXIT_SECONDS)) $(if $(STOP_AT),-DVIB_STOP_AT=$(STOP_AT)) $(if $(PROFILE),-DVIB_PROFILE=$(PROFILE)) $(if $(AUTOPLAY),-DVIB_AUTOPLAY=$(AUTOPLAY)) $(if $(AUTOPLAY_END),-DVIB_AUTOPLAY_END=$(AUTOPLAY_END)) $(if $(FAST),-DVIB_FAST=1) $(if $(WAVDUMP),-DVIB_WAVDUMP=$(WAVDUMP))
+DEFS := -DPSX_NO_DEBUG_TOOLS -DPSX_WII=1 -DPSX_NATIVE_BUILD=1 -DPSX_ENABLE_BLOCK_CYCLES=1 -DPSX_HAS_GAME_DISPATCH=1 $(if $(EXIT_SECONDS),-DVIB_EXIT_SECONDS=$(EXIT_SECONDS)) $(if $(STOP_AT),-DVIB_STOP_AT=$(STOP_AT)) $(if $(PROFILE),-DVIB_PROFILE=$(PROFILE)) $(if $(AUTOPLAY),-DVIB_AUTOPLAY=$(AUTOPLAY)) $(if $(AUTOPLAY_END),-DVIB_AUTOPLAY_END=$(AUTOPLAY_END)) $(if $(FAST),-DVIB_FAST=1) $(if $(filter 1,$(SCREENSHOTS)),-DVIB_SCREENSHOTS=1) $(if $(WAVDUMP),-DVIB_WAVDUMP=$(WAVDUMP))
 INC  := -Isource/shim -Isource -I$(RT)/include -I$(GEN)/main -I$(FW)/recompiler/src -I$(FW)/recompiler/lib/toml11 \
         -I$(BUILD)/libwiiinput/include -I$(LIBOGC)/include -I/opt/devkitpro/portlibs/ppc/include -I/opt/devkitpro/portlibs/wii/include
 OPT      ?= -O3
