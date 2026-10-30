@@ -1271,6 +1271,41 @@ EXACT.append(("src/spu.c", "static int16_t rev_read(uint32_t reg_addr, int32_t b
 EXACT.append(("src/spu.c", "static void rev_write(uint32_t reg_addr, int32_t v, int wren) {",
      "static inline __attribute__((always_inline)) void rev_write(uint32_t reg_addr, int32_t v, int wren) {"))
 
+# Lines (Vibri is drawn with them): without the hi-res and wide mirrors, the
+# Bresenham walk writes native pixels with the clip box and draw state hoisted.
+EXACT.append(("src/gpu_sw_renderer.c",
+     "void sw_draw_line(int x0, int y0, int x1, int y1, uint16_t color) {\n"
+     "    RTarget n = rt_native();\n",
+     "void sw_draw_line(int x0, int y0, int x1, int y1, uint16_t color) {\n"
+     "    RTarget n = rt_native();\n"
+     "#ifdef PSX_WII\n"
+     "    if (!g_hr && !g_wide_cur) {\n"
+     "        const int bx1 = max_i(n.cx1, 0), bx2 = min_i(n.cx2, n.w - 1);\n"
+     "        const int by1 = max_i(n.cy1, 0), by2 = min_i(n.cy2, n.h - 1);\n"
+     "        const int mc = g_mask_check_bit, st = g_semi_trans_enabled, mode = g_semi_trans_mode;\n"
+     "        const uint16_t setb = g_mask_set_bit ? 0x8000u : 0u;\n"
+     "        const int mark = n.buf == g_vram;\n"
+     "        int dx = abs(x1 - x0), dy = -abs(y1 - y0);\n"
+     "        int sx = (x0 < x1) ? 1 : -1, sy = (y0 < y1) ? 1 : -1;\n"
+     "        int err = dx + dy;\n"
+     "        for (;;) {\n"
+     "            if (x0 >= bx1 && x0 <= bx2 && y0 >= by1 && y0 <= by2) {\n"
+     "                uint16_t *px = n.buf + y0 * n.w + x0;\n"
+     "                if (!(mc && (*px & 0x8000u))) {\n"
+     "                    uint16_t c = st ? blend_pixels(*px, color, mode) : color;\n"
+     "                    *px = (uint16_t)(c | setb);\n"
+     "                    if (mark) gpu_vram_dirty_mark_row((uint32_t)y0);\n"
+     "                }\n"
+     "            }\n"
+     "            if (x0 == x1 && y0 == y1) break;\n"
+     "            int e2 = 2 * err;\n"
+     "            if (e2 >= dy) { err += dy; x0 += sx; }\n"
+     "            if (e2 <= dx) { err += dx; y0 += sy; }\n"
+     "        }\n"
+     "        return;\n"
+     "    }\n"
+     "#endif\n"))
+
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed
 # its due cycle, after any command answered in the same pass. Advertising it
