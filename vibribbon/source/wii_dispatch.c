@@ -113,7 +113,7 @@ static void note_code_pages(void)
     dirty_ram_text_code_ranges_done();
 }
 typedef struct { uint32_t addr, seq; int prog1; } OkMemo;   /* prog1: program + 1, 0 if empty */
-static OkMemo s_ok_memo[256];
+static OkMemo s_ok_memo[4096];   /* a menu frame checks ~1000 addresses */
 static OkMemo s_ok_last;
 
 /* The boot loader's functions all lie in its own text, below the main
@@ -131,7 +131,7 @@ int psx_game_text_native_ok(uint32_t addr)
 {
     note_code_pages();
     if (boot_psx_game_address_in_text(addr)) return boot_psx_game_text_native_ok(addr);
-    OkMemo *m = &s_ok_memo[(addr >> 2) & 255u];
+    OkMemo *m = &s_ok_memo[(addr >> 2) & 4095u];
     if (m->addr == addr && m->prog1 == s_cur + 1 && m->seq == dirty_ram_text_seq()) {
         s_ok_last = *m;
         return 1;

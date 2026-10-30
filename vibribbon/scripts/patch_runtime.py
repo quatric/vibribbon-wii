@@ -1246,19 +1246,34 @@ EXACT.append(("src/memory.c",
      "void psx_write_word(uint32_t addr, uint32_t val) {\n"
      "    extern void (*g_overlay_flush_pending_cycles)(void);\n",
      "#ifdef PSX_WII\n"
-     "int psx_ram_bulk_write_ok(uint32_t phys, uint32_t len) {\n"
+     "/* Whether a DMA may write [phys, phys + len) straight into RAM: nothing\n"
+     " * watches those bytes. With text_noted, the caller reports the words it\n"
+     " * wrote to the text guard itself (psx_ram_bulk_note_text). */\n"
+     "static int psx_ram_bulk_ok(uint32_t phys, uint32_t len, int text_noted) {\n"
      "    extern void (*g_overlay_flush_pending_cycles)(void);\n"
      "    if (g_overlay_flush_pending_cycles || g_ls_mode != 0 || g_ds_recording ||\n"
      "        g_card_data_writes_armed || (sr_ptr && (*sr_ptr & 0x10000u))) return 0;\n"
      "    if (len == 0 || phys < DIRTY_RAM_KERNEL_TRACK_BYTES || phys >= RAM_SIZE ||\n"
      "        len > RAM_SIZE - phys) return 0;\n"
      "    if (D44_PHYS >= phys && D44_PHYS - phys < len) return 0;\n"
-     "    if (text_ref_image && phys < text_ref_hi && phys + len > text_ref_lo) return 0;\n"
+     "    if (!text_noted && text_ref_image && phys < text_ref_hi && phys + len > text_ref_lo) return 0;\n"
      "    for (uint32_t pg = phys >> DIRTY_RAM_PAGE_SHIFT;\n"
      "         pg <= (phys + len - 1u) >> DIRTY_RAM_PAGE_SHIFT; pg++)\n"
      "        if (((g_dirty_ram_exec_page_bitmap[pg >> 5] | overlay_watch_bitmap[pg >> 5])\n"
      "             >> (pg & 31u)) & 1u) return 0;\n"
      "    return 1;\n"
+     "}\n"
+     "int psx_ram_bulk_write_ok(uint32_t phys, uint32_t len) { return psx_ram_bulk_ok(phys, len, 0); }\n"
+     "int psx_ram_bulk_write_ok_noted(uint32_t phys, uint32_t len) { return psx_ram_bulk_ok(phys, len, 1); }\n"
+     "/* What psx_write_word's text guard would have noted for the words now in\n"
+     " * [phys, phys + len). */\n"
+     "void psx_ram_bulk_note_text(uint32_t phys, uint32_t len) {\n"
+     "    if (!text_ref_image || phys >= text_ref_hi || phys + len <= text_ref_lo) return;\n"
+     "    for (uint32_t a = phys; a < phys + len; a += 4u) {\n"
+     "        uint32_t w;\n"
+     "        memcpy(&w, &ram[a], 4);\n"
+     "        text_guard_note_write(a, __builtin_bswap32(w), 4);\n"
+     "    }\n"
      "}\n"
      "#endif\n"
      "void psx_write_word(uint32_t addr, uint32_t val) {\n"
@@ -1429,6 +1444,71 @@ EXACT.append(("src/sio.c",
     "int sio_tick0_idle(void) {\n"
     "    return !(sio_irq_pending && sio_irq_countdown > 0) && !s_ape_unstick_pending;\n"
     "}\n"))
+
+# newlib's memcmp is a byte loop; GTE commands compare the 31 control
+# registers before every command.
+EXACT.append(("src/gte.cpp",
+    "    const int ctrl_changed = !s_gte_ctrl_valid ||\n"
+    "        std::memcmp(cpu->gte_ctrl, s_gte_ctrl_seen, sizeof(s_gte_ctrl_seen)) != 0;\n",
+    "    uint32_t ctrl_diff = 0;\n"
+    "    for (int i = 0; i < 31; ++i) ctrl_diff |= cpu->gte_ctrl[i] ^ s_gte_ctrl_seen[i];\n"
+    "    const int ctrl_changed = !s_gte_ctrl_valid || ctrl_diff != 0;\n"))
+
+# SPU RAM -> CPU RAM DMA in bulk: the game reads the CD audio capture buffers
+# back every frame, tens of thousands of words, one psx_write_word each.
+EXACT.append(("src/spu.c",
+    "int spu_dma_ready(void) {\n",
+    "/* spu_dma_read() over a whole transfer, into guest RAM's little-endian\n"
+    " * bytes. Guest time does not move during a transfer, so the access hook\n"
+    " * has nothing to do after its first call. */\n"
+    "void spu_dma_read_block(uint8_t *dst, uint32_t words) {\n"
+    "    if (g_spu_access_hook) g_spu_access_hook();\n"
+    "    for (uint32_t i = 0; i < words; i++, dst += 4) {\n"
+    "        spu_irq_check(transfer_addr, 4u);\n"
+    "        if (transfer_addr + 3 < SPU_RAM_SIZE) memcpy(dst, &spu_ram[transfer_addr], 4);\n"
+    "        else memset(dst, 0, 4);\n"
+    "        transfer_addr = (transfer_addr + 4) % SPU_RAM_SIZE;\n"
+    "    }\n"
+    "}\n"
+    "\n"
+    "int spu_dma_ready(void) {\n"))
+EXACT.append(("src/dma.c",
+    "        for (uint32_t i = 0; i < total_words; i++) {\n"
+    "            psx_write_word(addr, spu_dma_read());\n",
+    "#ifdef PSX_WII\n"
+    "        extern int psx_ram_bulk_write_ok_noted(uint32_t phys, uint32_t len);\n"
+    "        extern void psx_ram_bulk_note_text(uint32_t phys, uint32_t len);\n"
+    "        extern uint8_t *memory_get_ram_ptr(void);\n"
+    "        extern uint64_t g_guest_store_count;\n"
+    "        extern void spu_dma_read_block(uint8_t *dst, uint32_t words);\n"
+    "        if (!step && total_words && total_words <= (0x200000u - addr) / 4u &&\n"
+    "            psx_ram_bulk_write_ok_noted(addr, 4u * total_words)) {\n"
+    "            spu_dma_read_block(memory_get_ram_ptr() + addr, total_words);\n"
+    "            psx_ram_bulk_note_text(addr, 4u * total_words);\n"
+    "            g_guest_store_count += total_words;\n"
+    "            addr = (addr + 4u * total_words) & 0x1FFFFCu;\n"
+    "        } else\n"
+    "#endif\n"
+    "        for (uint32_t i = 0; i < total_words; i++) {\n"
+    "            psx_write_word(addr, spu_dma_read());\n"))
+
+# The text guard compares every store into the program image (all of the
+# game's data) against the reference; newlib's memcmp is a byte loop.
+EXACT.append(("src/memory.c",
+    "    uint8_t buf[4] = { (uint8_t)val, (uint8_t)(val >> 8),\n"
+    "                       (uint8_t)(val >> 16), (uint8_t)(val >> 24) };\n"
+    "    if (memcmp(ref, buf, (size_t)size) != 0) {\n",
+    "    int differs;\n"
+    "    if (size == 4) {\n"
+    "        uint32_t r;\n"
+    "        memcpy(&r, ref, 4);\n"
+    "        differs = r != __builtin_bswap32(val);\n"
+    "    } else if (size == 2) {\n"
+    "        differs = ref[0] != (uint8_t)val || ref[1] != (uint8_t)(val >> 8);\n"
+    "    } else {\n"
+    "        differs = ref[0] != (uint8_t)val;\n"
+    "    }\n"
+    "    if (differs) {\n"))
 
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed
