@@ -1198,6 +1198,56 @@ EXACT.append(("src/gpu_sw_renderer.c",
      "#endif\n"
      "    for (int row = 0; row < h; row++) {\n"))
 
+# DMA bursts to RAM (the ordering-table clear every frame) wrote each word
+# through psx_write_word. Where every word of the range would take its RAM
+# fast path and the text and overlay notes have nothing to do there, write
+# the words directly.
+EXACT.append(("src/memory.c",
+     "void psx_write_word(uint32_t addr, uint32_t val) {\n"
+     "    extern void (*g_overlay_flush_pending_cycles)(void);\n",
+     "#ifdef PSX_WII\n"
+     "int psx_ram_bulk_write_ok(uint32_t phys, uint32_t len) {\n"
+     "    extern void (*g_overlay_flush_pending_cycles)(void);\n"
+     "    if (g_overlay_flush_pending_cycles || g_ls_mode != 0 || g_ds_recording ||\n"
+     "        g_card_data_writes_armed || (sr_ptr && (*sr_ptr & 0x10000u))) return 0;\n"
+     "    if (len == 0 || phys < DIRTY_RAM_KERNEL_TRACK_BYTES || phys >= RAM_SIZE ||\n"
+     "        len > RAM_SIZE - phys) return 0;\n"
+     "    if (D44_PHYS >= phys && D44_PHYS - phys < len) return 0;\n"
+     "    if (text_ref_image && phys < text_ref_hi && phys + len > text_ref_lo) return 0;\n"
+     "    for (uint32_t pg = phys >> DIRTY_RAM_PAGE_SHIFT;\n"
+     "         pg <= (phys + len - 1u) >> DIRTY_RAM_PAGE_SHIFT; pg++)\n"
+     "        if (((g_dirty_ram_exec_page_bitmap[pg >> 5] | overlay_watch_bitmap[pg >> 5])\n"
+     "             >> (pg & 31u)) & 1u) return 0;\n"
+     "    return 1;\n"
+     "}\n"
+     "#endif\n"
+     "void psx_write_word(uint32_t addr, uint32_t val) {\n"
+     "    extern void (*g_overlay_flush_pending_cycles)(void);\n"))
+EXACT.append(("src/dma.c",
+     "    uint32_t addr = channels[6].madr & 0x1FFFFCu;\n\n"
+     "    for (uint32_t i = 0; i < num_entries; i++) {\n",
+     "    uint32_t addr = channels[6].madr & 0x1FFFFCu;\n\n"
+     "#ifdef PSX_WII\n"
+     "    {\n"
+     "        extern int psx_ram_bulk_write_ok(uint32_t phys, uint32_t len);\n"
+     "        extern uint8_t *memory_get_ram_ptr(void);\n"
+     "        extern uint64_t g_guest_store_count;\n"
+     "        uint32_t span = 4u * (num_entries - 1u);\n"
+     "        if (addr >= span && psx_ram_bulk_write_ok(addr - span, span + 4u)) {\n"
+     "            uint8_t *ram = memory_get_ram_ptr();\n"
+     "            for (uint32_t i = 0; i < num_entries; i++, addr -= 4u) {\n"
+     "                uint32_t le = __builtin_bswap32(i == num_entries - 1u ? 0x00FFFFFFu\n"
+     "                                                : ((addr - 4u) & 0x00FFFFFFu));\n"
+     "                memcpy(ram + addr, &le, 4);\n"
+     "            }\n"
+     "            g_guest_store_count += num_entries;\n"
+     "            complete_transfer(6);\n"
+     "            return;\n"
+     "        }\n"
+     "    }\n"
+     "#endif\n"
+     "    for (uint32_t i = 0; i < num_entries; i++) {\n"))
+
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed
 # its due cycle, after any command answered in the same pass. Advertising it
