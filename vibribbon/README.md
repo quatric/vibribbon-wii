@@ -47,7 +47,8 @@ and cycle counts unchanged. Two opt-ins trade exactness for speed:
   are under 512 cycles behind, so a polled counter or status bit can read that
   much late (the pad routine polls the SIO, timer 1 and I_STAT for every byte).
 
-In a course the two together run about 1.6x the default speed.
+In a course the two together run about 2.1x the default speed, which is full
+speed in Dolphin.
 
 ## SD card layout
 
@@ -92,8 +93,8 @@ frames per second):
 | | default (cycle-exact) | `VIB_BLOCK_CYCLES=1` + `FAST=1` |
 |---|---|---|
 | title, waiting screens | 50 fps | 50 fps |
-| menus | ~15 fps | ~20 fps |
-| a course | ~16 fps | ~24 fps |
+| menus | ~19 fps | ~43 fps |
+| a course | ~23 fps | 50 fps |
 
 The game waits for vblank in PsyQ's `v_wait` loop for most of an idle frame;
 `source/wii_idle.c` skips those waits without changing any guest-visible
@@ -116,7 +117,7 @@ Done:
   libogc, runtime stubs. The guest runs on its own thread with a 1 MB stack.
 
 Not done:
-- Full speed in menus and courses.
+- Full speed in the menus, and in the cycle-exact default build.
 - Reading CD audio tracks from a USB drive (the original's level generation),
   reusing `source/usbcd.c` from the parent project.
 - libwiiupdate self-update hook.
