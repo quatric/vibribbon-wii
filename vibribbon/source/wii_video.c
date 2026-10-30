@@ -150,12 +150,20 @@ void wii_present(const uint16_t *vram, int x, int y, int w, int h)
         const uint16_t *row = vram + (sy << 10);
         if (fw == w) {                       /* one PS1 pixel per XFB pixel */
             const uint16_t *src = row + x;
+            uint32_t prev_in = 0, prev_out = 0;
+            int have = 0;
             for (int dx = 0; dx < dw; dx++) {
-                uint32_t a = s_ycbcr_lut[src[dx * 2] & 0x7FFF];
-                uint32_t b = s_ycbcr_lut[src[dx * 2 + 1] & 0x7FFF];
+                uint32_t in;                 /* runs of one colour convert once */
+                memcpy(&in, src + dx * 2, 4);
+                in &= 0x7FFF7FFFu;
+                if (have && in == prev_in) { out[dx] = prev_out; continue; }
+                uint32_t a = s_ycbcr_lut[in >> 16];
+                uint32_t b = s_ycbcr_lut[in & 0x7FFF];
                 uint32_t cb = (((a >> 8) & 0xFF) + ((b >> 8) & 0xFF)) >> 1;
                 uint32_t cr = ((a & 0xFF) + (b & 0xFF)) >> 1;
-                out[dx] = ((a >> 16) << 24) | (cb << 16) | ((b >> 16) << 8) | cr;
+                prev_out = out[dx] = ((a >> 16) << 24) | (cb << 16) | ((b >> 16) << 8) | cr;
+                prev_in = in;
+                have = 1;
             }
             continue;
         }
