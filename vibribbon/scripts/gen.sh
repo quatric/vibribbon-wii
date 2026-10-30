@@ -84,7 +84,9 @@ else
     BIOS_STEM=OpenBIOS
     BIOS_ROM="$FW/bios/openbios.bin"
 fi
-(cd "$FW" && env -u PSX_CODEGEN_CYCLE_PER_INSN bash tools/regen_bios.sh --config "bios/$BIOS_STEM.toml" >/dev/null)
+# With VIB_BLOCK_CYCLES=1 the BIOS is block-timed too (PSX_CODEGEN_CYCLE_PER_INSN=0
+# is still exported); its loops (clearing RAM, copying, the CD routines) run the boot.
+(cd "$FW" && bash tools/regen_bios.sh --config "bios/$BIOS_STEM.toml" >/dev/null)
 rm -f "$GEN"/bios/*.c
 mkdir -p "$GEN/bios"
 cp "$FW"/generated/"$BIOS_STEM"_*.c "$GEN/bios/"
