@@ -92,13 +92,17 @@ frames per second):
 
 | | default (cycle-exact) | `VIB_BLOCK_CYCLES=1` + `FAST=1` |
 |---|---|---|
-| title, waiting screens | 50 fps | 50 fps |
-| menus | ~19 fps | ~45 fps |
+| boot, intro, title | 50 fps | 50 fps, ~40 fps for the first second |
+| menus | ~19 fps | 49-50 fps |
+| loading | | 50 fps, ~40 fps for one transition |
 | a course | ~23 fps | 50 fps |
 
-The game waits for vblank in PsyQ's `v_wait` loop for most of an idle frame;
+The game waits for vblank in PsyQ's `v_wait` loop for most of an idle frame,
+and for the CD in libcd's `CdSync()`/`CdReady()` and the BIOS's event loops;
 `source/wii_idle.c` skips those waits without changing any guest-visible
-timing. What remains in a course is the runtime's faithful model of the PS1:
+timing. A loop that stores or reads device registers is run once with the
+runtime watching it, and skipped only when its stores leave memory as it was and
+its device accesses change nothing. What remains in a course is the runtime's faithful model of the PS1:
 per-instruction timing, a device pass per DMA packet, SIO and timer polling,
 and the SPU rendered per sample while its IRQ is armed. The game's own code is
 under 10% of the time.
@@ -117,7 +121,7 @@ Done:
   libogc, runtime stubs. The guest runs on its own thread with a 1 MB stack.
 
 Not done:
-- Full speed in the menus, and in the cycle-exact default build.
+- Full speed in the cycle-exact default build, and in the two slow seconds above.
 - Reading CD audio tracks from a USB drive (the original's level generation),
   reusing `source/usbcd.c` from the parent project.
 - libwiiupdate self-update hook.

@@ -827,11 +827,48 @@ EXACT.append(("src/memory.c",
      "    extern void (*g_overlay_flush_pending_cycles)(void);\n",
      "static void psx_write_word_raw(uint32_t addr, uint32_t val);\n"
      "#ifdef PSX_WII\n"
+     "/* The host's poll-loop skip (source/wii_idle.c) can ask whether an\n"
+     " * iteration's stores leave memory as it was: while it probes, each store\n"
+     " * logs what it overwrites, and psx_poll_probe_settled() checks that every\n"
+     " * byte stored to holds its old value again. */\n"
+     "extern int g_poll_store_probe, g_poll_store_dirty;\n"
+     "extern uint32_t g_poll_dead_lo;\n"
+     "#define POLL_LOG_MAX 64\n"
+     "static uint32_t s_plog_addr[POLL_LOG_MAX];\n"
+     "static uint8_t s_plog_old[POLL_LOG_MAX][4], s_plog_size[POLL_LOG_MAX];\n"
+     "static int s_plog_n;\n"
+     "void psx_poll_probe_begin(void) { s_plog_n = 0; }\n"
+     "int psx_poll_probe_settled(void) {\n"
+     "    for (int i = 0; i < s_plog_n; i++)\n"
+     "        for (uint32_t b = 0; b < s_plog_size[i]; b++) {\n"
+     "            uint32_t a = s_plog_addr[i] + b;\n"
+     "            int first = 1;\n"
+     "            for (int j = 0; j < i && first; j++)\n"
+     "                if (a - s_plog_addr[j] < s_plog_size[j]) first = 0;\n"
+     "            if (first && ram[a] != s_plog_old[i][b]) return 0;\n"
+     "        }\n"
+     "    return 1;\n"
+     "}\n"
+     "static void psx_poll_store_note(uint32_t phys, int size) {\n"
+     "    uint32_t pg = phys >> DIRTY_RAM_PAGE_SHIFT;\n"
+     "    if (phys - g_poll_dead_lo < 0x1000u) return;     /* stack below the loop's own frame */\n"
+     "    if ((text_ref_image && phys < text_ref_hi && phys + (uint32_t)size > text_ref_lo) ||\n"
+     "        (((g_dirty_ram_exec_page_bitmap[pg >> 5] | overlay_watch_bitmap[pg >> 5]) >> (pg & 31u)) & 1u) ||\n"
+     "        s_plog_n == POLL_LOG_MAX) {\n"
+     "        g_poll_store_dirty = 1;\n"
+     "        return;\n"
+     "    }\n"
+     "    s_plog_addr[s_plog_n] = phys;\n"
+     "    s_plog_size[s_plog_n] = (uint8_t)size;\n"
+     "    memcpy(s_plog_old[s_plog_n], &ram[phys], (size_t)size);\n"
+     "    s_plog_n++;\n"
+     "}\n"
      "static inline __attribute__((always_inline)) int psx_write_ram_fast(uint32_t addr, uint32_t val, int size) {\n"
      "    if (addr >= 0xC0000000u || (sr_ptr && (*sr_ptr & 0x10000u))) return 0;\n"
      "    uint32_t phys = psx_phys_addr(addr);\n"
      "    if (phys - DIRTY_RAM_KERNEL_TRACK_BYTES >= RAM_SIZE - DIRTY_RAM_KERNEL_TRACK_BYTES ||\n"
      "        g_card_data_writes_armed || (size == 4 && phys == D44_PHYS)) return 0;\n"
+     "    if (__builtin_expect(g_poll_store_probe, 0)) psx_poll_store_note(phys, size);\n"
      "    g_guest_store_count++;\n"
      "    text_guard_note_write(phys, val, size);\n"
      "    overlay_watch_note_write(phys, (uint32_t)size);\n"
@@ -846,6 +883,7 @@ EXACT.append(("src/memory.c",
      "#ifdef PSX_WII\n"
      "    if (!g_overlay_flush_pending_cycles && g_ls_mode == 0 && !g_ds_recording &&\n"
      "        psx_write_ram_fast(addr, val, 4)) return;\n"
+     "    if (g_poll_store_probe && psx_phys_addr(addr) - 0x1F801000u >= 0x2000u) g_poll_store_dirty = 1;\n"
      "#endif\n"))
 
 # Nothing in the Wii build arms the parity ring or the debug server's write
@@ -939,6 +977,7 @@ for _fn, _ty, _sz in (("psx_write_half", "uint16_t", 2), ("psx_write_byte", "uin
          "#ifdef PSX_WII\n"
          "    if (!g_overlay_flush_pending_cycles && g_ls_mode == 0 && !g_ds_recording &&\n"
          "        psx_write_ram_fast(addr, val, %d)) return;\n"
+         "    if (g_poll_store_probe && psx_phys_addr(addr) - 0x1F801000u >= 0x2000u) g_poll_store_dirty = 1;\n"
          "#endif\n" % (_fn, _ty, _sz)))
 
 # The guard's change counter, for the host's dispatch caches. A write into a
@@ -1041,9 +1080,10 @@ extern uint32_t g_text_ref_lo, g_text_ref_hi;
 extern uint32_t g_dirty_ram_exec_page_bitmap[];
 extern uint32_t overlay_watch_bitmap[];
 extern uint64_t g_guest_store_count;
+extern int g_poll_store_probe;
 static inline __attribute__((always_inline)) int psx_store_inline_ok(uint32_t addr, uint32_t size,
                                                                      uint32_t *phys_out) {
-    if (g_overlay_flush_pending_cycles || g_ls_mode != 0 || g_ds_recording ||
+    if (g_overlay_flush_pending_cycles || g_ls_mode != 0 || g_ds_recording || g_poll_store_probe ||
         g_card_data_writes_armed || addr >= 0xC0000000u ||
         (g_mem_sr_ptr && (*g_mem_sr_ptr & 0x10000u)))
         return 0;
@@ -1305,6 +1345,90 @@ EXACT.append(("src/gpu_sw_renderer.c",
      "        return;\n"
      "    }\n"
      "#endif\n"))
+
+# The poll-loop skip's probe (source/wii_idle.c): device registers an
+# iteration may touch without changing anything a later iteration could see.
+EXACT.append(("src/memory.c",
+    "static uint32_t mmio_read32(uint32_t addr) {\n"
+    "    extern void psx_devices_mmio_sync_read(void);\n",
+    "#ifdef PSX_WII\n"
+    "extern int g_poll_store_probe, g_poll_store_dirty;\n"
+    "extern int cdrom_write_silent(uint32_t addr, uint32_t value);\n"
+    "extern int sio_tick0_idle(void);\n"
+    "/* Reads: registers whose read changes nothing. */\n"
+    "static inline int psx_mmio_pure(uint32_t a) {\n"
+    "    if ((a & ~3u) == 0x1F801070u) return sio_tick0_idle();  /* the read ticks the SIO */\n"
+    "    if (a >= 0x1F801070u && a < 0x1F801100u) return 1;      /* IRQ and DMA registers */\n"
+    "    if (a >= 0x1F801100u && a < 0x1F801130u)                /* timer counters and targets */\n"
+    "        return (a & 0xFu) < 4u || ((a & 0xFu) >= 8u && (a & 0xFu) < 12u);\n"
+    "    return a == 0x1F801814u || a == 0x1F801800u || a == 0x1F801803u;\n"
+    "}\n"
+    "/* Writes (after the devices are synced): ones that leave every register as\n"
+    " * it was, such as acknowledging interrupts that are not pending. */\n"
+    "static inline int psx_mmio_write_silent(uint32_t a, uint32_t v, uint32_t width_mask) {\n"
+    "    if (a == 0x1F801070u) return (i_stat & ~v & 0x7FFu & width_mask) == 0;\n"
+    "    if (a >= 0x1F801800u && a <= 0x1F801803u) return cdrom_write_silent(a, v);\n"
+    "    return 0;\n"
+    "}\n"
+    "#define POLL_MMIO_READ(a) \\\n"
+    "    do { if (__builtin_expect(g_poll_store_probe, 0) && !psx_mmio_pure(a)) g_poll_store_dirty = 1; } while (0)\n"
+    "#define POLL_MMIO_WRITE(a, v, m) \\\n"
+    "    do { if (__builtin_expect(g_poll_store_probe, 0) && !psx_mmio_write_silent((a), (v), (m))) \\\n"
+    "             g_poll_store_dirty = 1; } while (0)\n"
+    "#else\n"
+    "#define POLL_MMIO_READ(a) do { } while (0)\n"
+    "#define POLL_MMIO_WRITE(a, v, m) do { } while (0)\n"
+    "#endif\n"
+    "static uint32_t mmio_read32(uint32_t addr) {\n"
+    "    POLL_MMIO_READ(addr);\n"
+    "    extern void psx_devices_mmio_sync_read(void);\n"))
+for _ty, _n in (("uint16_t", "16"), ("uint8_t", "8")):
+    EXACT.append(("src/memory.c",
+        "static %s mmio_read%s(uint32_t addr) {\n"
+        "    extern void psx_devices_mmio_sync_read(void);\n" % (_ty, _n),
+        "static %s mmio_read%s(uint32_t addr) {\n"
+        "    POLL_MMIO_READ(addr);\n"
+        "    extern void psx_devices_mmio_sync_read(void);\n" % (_ty, _n)))
+for _ty, _n, _m in (("uint32_t", "32", "0xFFFFFFFFu"), ("uint16_t", "16", "0xFFFFu"), ("uint8_t", "8", "0xFFu")):
+    EXACT.append(("src/memory.c",
+        "static void mmio_write%s(uint32_t addr, %s val) {\n"
+        "    psx_devices_mmio_sync();\n" % (_n, _ty),
+        "static void mmio_write%s(uint32_t addr, %s val) {\n"
+        "    psx_devices_mmio_sync();\n"
+        "    POLL_MMIO_WRITE(addr, val, %s);\n" % (_n, _ty, _m)))
+EXACT.append(("src/cdrom.c",
+    "void cdrom_write(uint32_t addr, uint32_t value) {\n",
+    "/* Whether a write, with the devices synced, would change nothing: an index\n"
+    " * select, the interrupt enable rewritten, or an acknowledge with nothing\n"
+    " * to acknowledge and nothing waiting on one. */\n"
+    "int cdrom_write_silent(uint32_t addr, uint32_t value) {\n"
+    "    uint8_t val = (uint8_t)value;\n"
+    "    if (addr == 0x1F801800u) return 1;\n"
+    "    if (index_reg != 1) return 0;\n"
+    "    if (addr == 0x1F801802u) return (val & 0x1F) == irq_enable;\n"
+    "    if (addr != 0x1F801803u) return 0;\n"
+    "    return (irq_flag & val & 0x1F) == 0 && !((val & 0x40) && param_count) &&\n"
+    "           !(pending_dataready && pending_present_due == 0) &&\n"
+    "           !(queued_cmd.pending && irq_flag == 0) &&\n"
+    "           !(pending.pending && psx_cycle_count >= pending.due_cyc && irq_flag == 0);\n"
+    "}\n"
+    "\n"
+    "void cdrom_write(uint32_t addr, uint32_t value) {\n"))
+
+EXACT.append(("src/sio.c",
+    "void sio_ape_card_unstick_pump(void) {\n"
+    "    if (s_ape_unstick_pending)\n"
+    "        ape_card_unstick_maybe(1);\n"
+    "}\n",
+    "void sio_ape_card_unstick_pump(void) {\n"
+    "    if (s_ape_unstick_pending)\n"
+    "        ape_card_unstick_maybe(1);\n"
+    "}\n"
+    "\n"
+    "/* Whether sio_tick(0), run by an I_STAT read, would do nothing. */\n"
+    "int sio_tick0_idle(void) {\n"
+    "    return !(sio_irq_pending && sio_irq_countdown > 0) && !s_ape_unstick_pending;\n"
+    "}\n"))
 
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed

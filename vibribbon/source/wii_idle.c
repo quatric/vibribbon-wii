@@ -28,6 +28,8 @@ extern uint64_t g_guest_store_count, g_mmio_access_count;
 extern uint32_t psx_idle_cycles_to_next_observable_event(void);
 extern uint8_t *memory_get_ram_ptr(void);
 extern int psx_get_in_exception(void);
+extern void psx_poll_probe_begin(void);
+extern int psx_poll_probe_settled(void);
 
 #define STREAK_MIN 3
 #define SKIP_MAX   1200000u            /* more than one vblank interval */
@@ -70,26 +72,41 @@ static int is_v_wait_loop(const uint8_t *ram, uint32_t pc)
            ram_word(ram, pc + 0x5C) == 0x00000000;
 }
 
-/* Pure poll loops, such as the title program's wait for a CD read
- * (lw/beq on flags its interrupt handler sets) or the TestEvent() loops of
- * the game and of the BIOS's CD reads: between
- * two visits to the same check PC, with calls and returns in between, no
- * store and no MMIO access, and every register the same at both. The next
- * iteration then repeats this one exactly until an interrupt handler or DMA
- * changes memory, which only happens when devices are serviced: whole
- * iterations are skipped up to just before the next device deadline. */
-static uint32_t s_ppc, s_pq, s_pstreak, s_pcool, s_pvisits, s_pmiss;
+/* Poll loops, such as the title program's wait for a CD read (lw/beq on
+ * flags its interrupt handler sets), the TestEvent() loops of the game and of
+ * the BIOS's CD reads, or libcd's CdReady() polled from the game's loading
+ * loops: between two visits to the same check PC, with calls and returns in
+ * between, every register the same at both, and nothing done that a later
+ * iteration could see. The next iteration then repeats this one exactly
+ * until an interrupt handler or DMA changes memory, which only happens when
+ * devices are serviced: whole iterations are skipped up to just before the
+ * next device deadline.
+ *
+ * A loop with no store and no MMIO access qualifies as it is. One that stores
+ * or reads device registers (VSync(-1) reads the timers, CdReady() the CD
+ * status) is run once more with the runtime probing it: it qualifies when
+ * every store wrote what memory already held (or went to the stack below the
+ * loop's own frame), every device access was a side-effect-free one, and no
+ * device deadline came round meanwhile. */
+static uint32_t s_ppc, s_pq, s_pds, s_pdm, s_pstreak, s_pcool, s_pvisits, s_pmiss;
 static int s_psnap;                    /* s_pgpr holds the registers at s_ppc */
-static uint64_t s_pcycle, s_pstores, s_pmmio;
+static uint64_t s_pcycle, s_pstores, s_pmmio, s_pdeadline;
 static uint32_t s_pgpr[32], s_phi, s_plo;
 
+int g_poll_store_probe, g_poll_store_dirty;
+uint32_t g_poll_dead_lo = 0xFFFFFFFFu;
 uint64_t g_poll_skip_count, g_poll_skip_cycles, g_cdsync_skip_count, g_cdsync_skip_cycles;
+
+static inline void probe_off(void)
+{
+    g_poll_store_probe = 0;
+    g_poll_dead_lo = 0xFFFFFFFFu;
+}
 
 static void poll_reset(uint32_t check_pc)
 {
+    probe_off();
     s_ppc = check_pc;
-    s_pstores = g_guest_store_count;
-    s_pmmio = g_mmio_access_count;
     s_psnap = 0; s_pstreak = 0; s_pvisits = 0; s_pcool = 0; s_pmiss = 0;
 }
 
@@ -98,15 +115,13 @@ static void poll_snap(CPUState *cpu)
     memcpy(&s_pgpr[1], &cpu->gpr[1], 31 * 4);
     s_phi = cpu->hi; s_plo = cpu->lo;
     s_pcycle = psx_get_cycle_count();
+    s_pstores = g_guest_store_count;
+    s_pmmio = g_mmio_access_count;
     s_psnap = 1; s_pstreak = 0;
 }
 
 static void poll_loop_check(CPUState *cpu, uint32_t check_pc)
 {
-    if (g_guest_store_count != s_pstores || g_mmio_access_count != s_pmmio) {
-        poll_reset(check_pc);
-        return;
-    }
     if (s_pcool) {                         /* a loop that changes registers: look again later */
         if (--s_pcool == 0) poll_reset(check_pc);
         return;
@@ -122,10 +137,19 @@ static void poll_loop_check(CPUState *cpu, uint32_t check_pc)
         return;
     }
     s_pvisits = 0;
+    int probed = g_poll_store_probe, dirty = g_poll_store_dirty;
+    if (probed) {
+        probe_off();
+        if (!dirty && !psx_poll_probe_settled()) dirty = 1;
+    }
     if (psx_get_in_exception() != 0) { poll_reset(check_pc); return; }
     if (!s_psnap) { poll_snap(cpu); return; }
     uint64_t cyc = psx_get_cycle_count(), last = s_pcycle;
+    uint32_t ds = (uint32_t)(g_guest_store_count - s_pstores);
+    uint32_t dm = (uint32_t)(g_mmio_access_count - s_pmmio);
     s_pcycle = cyc;
+    s_pstores = g_guest_store_count;
+    s_pmmio = g_mmio_access_count;
     if (cpu->hi != s_phi || cpu->lo != s_plo || memcmp(&cpu->gpr[1], &s_pgpr[1], 31 * 4) != 0) {
         /* A PC can come round more than once an iteration (a call made
          * twice with other arguments): try the next one, a few times. */
@@ -136,22 +160,30 @@ static void poll_loop_check(CPUState *cpu, uint32_t check_pc)
     }
     uint32_t q = (uint32_t)(cyc - last);
     if (q == 0 || q >= 65536u) s_pstreak = 0;
-    else s_pstreak = q == s_pq ? s_pstreak + 1 : 1;
-    s_pq = q;
+    else s_pstreak = q == s_pq && ds == s_pds && dm == s_pdm ? s_pstreak + 1 : 1;
+    s_pq = q; s_pds = ds; s_pdm = dm;
     if (s_pstreak < STREAK_MIN) return;
+    if (psx_in_device_service || psx_next_service_cycle <= cyc) return;
+    if (ds | dm) {
+        if (!probed || dirty || cyc >= s_pdeadline) {   /* devices ran: probe again */
+            g_poll_store_dirty = 0;
+            psx_poll_probe_begin();
+            g_poll_dead_lo = (cpu->gpr[29] & 0x1FFFFFu) - 0x1000u;
+            g_poll_store_probe = 1;
+            s_pdeadline = psx_next_service_cycle;
+            return;
+        }
+    }
 
     /* Stop short of the next device deadline rather than the next event:
      * devices then catch up at the same cycles as they would have, which the
      * runtime's device timing depends on, and nothing can happen before it. */
-    if (psx_in_device_service || psx_next_service_cycle <= cyc) return;
     uint32_t k = (uint32_t)((psx_next_service_cycle - cyc - 1u) / q);
     if (k == 0) return;
     g_poll_skip_count++;
     g_poll_skip_cycles += (uint64_t)k * q;
     psx_advance_cycles(k * q);
     s_pcycle = psx_get_cycle_count();
-    s_pstores = g_guest_store_count;
-    s_pmmio = g_mmio_access_count;
 }
 
 /* libcd CdSync(0) waits for a CD command to complete in the resident boot
