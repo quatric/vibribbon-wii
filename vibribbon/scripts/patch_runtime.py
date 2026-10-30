@@ -960,6 +960,59 @@ EXACT.append(("src/memory.c",
      "}\n"
      "void dirty_ram_text_code_ranges_done(void) { text_code_pages_known = 1; text_seq++; }\n"))
 
+# Load timing in its steady state. Between two loads in block-timed game code
+# nothing touches the pipeline state, so a load usually finds ReadAbsorbWhich 0,
+# ReadAbsorb[0] 0 and the previous load pending. There the full sequence
+# (base, deps, LDS, absorb reset, fudge) comes down to clearing the slots it
+# would clear, setting four fields and charging 1 + 5 cycles, and while the
+# block defers its charges the two charges are one addition to the batch.
+# Every other state takes the full sequence.
+LOAD_SEQ = """        if (g_psx_load_delay) {
+            psx_cyc_base(cpu);
+            psx_cyc_deps(cpu, reg_mask);
+            if (cpu->ld_which_t == rt) cpu->ld_which_t = 0u;
+            psx_cyc_lds(cpu);
+            cpu->read_absorb[cpu->read_absorb_which] = 0u;
+            cpu->read_absorb_which = 0u;
+            uint32_t fudge = (uint32_t)((cpu->read_fudge >> 4) & 2u);
+            cpu->ld_absorb = 5u;%s
+            psx_cyc_charge(fudge + 5u);
+            cpu->ld_which_t = (uint8_t)rt;
+        }
+"""
+LOAD_FAST = """static inline __attribute__((always_inline)) int psx_cyc_load_delay_steady(CPUState* cpu,
+                                                    uint32_t rt, uint32_t reg_mask) {
+    uint32_t lw = cpu->ld_which_t;
+    if (cpu->read_absorb_which != 0u || cpu->read_absorb[0] != 0u || lw >= 32u) return 0;
+    reg_mask &= 0xFFFFFFFEu;
+    while (reg_mask) {
+        cpu->read_absorb[__builtin_ctz(reg_mask)] = 0u;
+        reg_mask &= reg_mask - 1u;
+    }
+    if (lw == rt) lw = 0u;
+    cpu->read_absorb[lw] = 0u;
+    cpu->read_fudge = (uint8_t)lw;
+    cpu->ld_absorb = 5u;
+    cpu->ld_which_t = (uint8_t)rt;
+    if (g_psx_cyc_bb_defer > 0 && !(g_ls_replay_active | g_event_step_conservative) &&
+        !psx_in_device_service && !g_psx_cyc_local_acc && g_psx_cyc_batch <= UINT32_MAX - 6u) {
+        g_psx_cyc_batch += 6u;
+    } else {
+        psx_cyc_charge(1u);
+        psx_cyc_charge(5u);
+    }
+    return 1;
+}
+
+"""
+for _c in (" /* main-RAM wait 3 + completion 2 */", ""):
+    EXACT.append(("include/psx_cyc.h", LOAD_SEQ % _c,
+                  LOAD_SEQ.replace("        if (g_psx_load_delay) {\n",
+                                   "        if (g_psx_load_delay && !psx_cyc_load_delay_steady(cpu, rt, reg_mask)) {\n", 1) % _c))
+EXACT.append(("include/psx_cyc.h",
+     "/* CPU data load value+timing. Full Beetle sequence for main RAM is inlined;\n",
+     LOAD_FAST + "/* CPU data load value+timing. Full Beetle sequence for main RAM is inlined;\n"))
+
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed
 # its due cycle, after any command answered in the same pass. Advertising it
