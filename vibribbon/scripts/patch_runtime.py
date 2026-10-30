@@ -1074,6 +1074,130 @@ EXACT.append(("include/psx_cyc.h",
      "extern uint8_t psx_cyc_load_byte(CPUState* cpu, uint32_t addr, uint32_t rt, uint32_t reg_mask);\n\n"
      + INLINE_STORES))
 
+# Rectangles in the software GPU: the per-pixel helpers check the buffer
+# bounds and the clip rect and reload every draw state global for each pixel.
+# The fast paths clip once per rect, hoist the state and the texture page
+# lookups, and write the same pixels in the same order.
+GPU_RECT_FAST = """#ifdef PSX_WII
+static inline void rect_clip(const RTarget *t, int x, int y, int w, int h,
+                             int *sx, int *sy, int *ex, int *ey) {
+    *sx = max_i(max_i(x, t->cx1), 0);
+    *ex = min_i(min_i(x + w - 1, t->cx2), t->w - 1);
+    *sy = max_i(max_i(y, t->cy1), 0);
+    *ey = min_i(min_i(y + h - 1, t->cy2), t->h - 1);
+}
+
+static void raster_flat_rect_fast(const RTarget *t, int x, int y, int w, int h,
+                                  uint16_t color) {
+    int sx, sy, ex, ey;
+    rect_clip(t, x, y, w, h, &sx, &sy, &ex, &ey);
+    if (sx > ex || sy > ey) return;
+    const int mc = g_mask_check_bit, st = g_semi_trans_enabled, mode = g_semi_trans_mode;
+    const uint16_t setb = g_mask_set_bit ? 0x8000u : 0u;
+    const int mark = t->buf == g_vram;
+    for (int py = sy; py <= ey; py++) {
+        uint16_t *row = t->buf + py * t->w;
+        int wrote = 0;
+        if (!mc && !st) {
+            const uint16_t c = (uint16_t)(color | setb);
+            for (int px = sx; px <= ex; px++) row[px] = c;
+            wrote = 1;
+        } else {
+            for (int px = sx; px <= ex; px++) {
+                uint16_t d = row[px];
+                if (mc && (d & 0x8000u)) continue;
+                uint16_t c = st ? blend_pixels(d, color, mode) : color;
+                row[px] = (uint16_t)(c | setb);
+                wrote = 1;
+            }
+        }
+        if (wrote && mark) gpu_vram_dirty_mark_row((uint32_t)py);
+    }
+}
+
+static void raster_textured_rect_fast(const RTarget *t, int x, int y, int w, int h,
+                                      int u, int v, uint16_t clut_x, uint16_t clut_y,
+                                      uint16_t texpage) {
+    int sx, sy, ex, ey;
+    rect_clip(t, x, y, w, h, &sx, &sy, &ex, &ey);
+    if (sx > ex || sy > ey) return;
+    const int tpx = (texpage & 0xF) * 64, tpy = ((texpage >> 4) & 1) * 256;
+    const int depth = (texpage >> 7) & 3;
+    const int tw = g_tw_mask_x | g_tw_mask_y;
+    const int mux = ~(g_tw_mask_x * 8), oux = (g_tw_off_x & g_tw_mask_x) * 8;
+    const int muy = ~(g_tw_mask_y * 8), ouy = (g_tw_off_y & g_tw_mask_y) * 8;
+    const int mc = g_mask_check_bit, st = g_semi_trans_enabled, mode = g_semi_trans_mode;
+    const int raw = g_raw_texture;
+    const uint16_t setb = g_mask_set_bit ? 0x8000u : 0u;
+    const int mark = t->buf == g_vram;
+    const uint16_t *clut = g_vram + (clut_y & (VRAM_HEIGHT - 1)) * VRAM_WIDTH;
+    uint16_t mr[32], mg[32], mb[32];
+    if (!raw) {
+        for (int i = 0; i < 32; i++) {
+            int r = (i * g_mod_r) >> 4, g = (i * g_mod_g) >> 4, b = (i * g_mod_b) >> 4;
+            mr[i] = (uint16_t)(r > 31 ? 31 : r);
+            mg[i] = (uint16_t)((g > 31 ? 31 : g) << 5);
+            mb[i] = (uint16_t)((b > 31 ? 31 : b) << 10);
+        }
+    }
+    for (int py = sy; py <= ey; py++) {
+        int tv = (v + (py - y)) & 0xFF;
+        if (tw) tv = (tv & muy) | ouy;
+        const uint16_t *trow = g_vram + ((tpy + tv) & (VRAM_HEIGHT - 1)) * VRAM_WIDTH;
+        uint16_t *row = t->buf + py * t->w;
+        int wrote = 0;
+        for (int px = sx; px <= ex; px++) {
+            int tu = (u + (px - x)) & 0xFF;
+            if (tw) tu = (tu & mux) | oux;
+            uint16_t texel;
+            if (depth == 0) {
+                uint16_t wd = trow[(tpx + (tu >> 2)) & (VRAM_WIDTH - 1)];
+                texel = clut[(clut_x + ((wd >> ((tu & 3) * 4)) & 0xF)) & (VRAM_WIDTH - 1)];
+            } else if (depth == 1) {
+                uint16_t wd = trow[(tpx + (tu >> 1)) & (VRAM_WIDTH - 1)];
+                texel = clut[(clut_x + ((wd >> ((tu & 1) * 8)) & 0xFF)) & (VRAM_WIDTH - 1)];
+            } else {
+                texel = trow[(tpx + tu) & (VRAM_WIDTH - 1)];
+            }
+            if (texel == 0) continue;
+            uint16_t d = row[px];
+            if (mc && (d & 0x8000u)) continue;
+            uint16_t c = raw ? (uint16_t)(texel & 0x7FFFu)
+                             : (uint16_t)(mr[texel & 31] | mg[(texel >> 5) & 31] | mb[(texel >> 10) & 31]);
+            if (st && (texel & 0x8000u)) c = blend_pixels(d, c, mode);
+            row[px] = (uint16_t)(c | setb);
+            wrote = 1;
+        }
+        if (wrote && mark) gpu_vram_dirty_mark_row((uint32_t)py);
+    }
+}
+#endif
+
+static void raster_flat_rect(const RTarget *t, int x, int y, int w, int h,
+                             uint16_t color) {
+#ifdef PSX_WII
+    raster_flat_rect_fast(t, x, y, w, h, color);
+    return;
+#endif
+"""
+EXACT.append(("src/gpu_sw_renderer.c",
+     "static void raster_flat_rect(const RTarget *t, int x, int y, int w, int h,\n"
+     "                             uint16_t color) {\n",
+     GPU_RECT_FAST))
+EXACT.append(("src/gpu_sw_renderer.c",
+     "                                 uint16_t texpage) {\n"
+     "    int s = t->s;\n"
+     "    for (int row = 0; row < h; row++) {\n",
+     "                                 uint16_t texpage) {\n"
+     "    int s = t->s;\n"
+     "#ifdef PSX_WII\n"
+     "    if (s == 1 && !g_texture_filter) {\n"
+     "        raster_textured_rect_fast(t, x, y, w, h, u, v, clut_x, clut_y, texpage);\n"
+     "        return;\n"
+     "    }\n"
+     "#endif\n"
+     "    for (int row = 0; row < h; row++) {\n"))
+
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed
 # its due cycle, after any command answered in the same pass. Advertising it
