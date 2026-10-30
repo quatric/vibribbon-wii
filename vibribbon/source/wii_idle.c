@@ -71,13 +71,14 @@ static int is_v_wait_loop(const uint8_t *ram, uint32_t pc)
 }
 
 /* Pure poll loops, such as the title program's wait for a CD read
- * (lw/beq on flags its interrupt handler sets) or a TestEvent() loop: between
+ * (lw/beq on flags its interrupt handler sets) or the TestEvent() loops of
+ * the game and of the BIOS's CD reads: between
  * two visits to the same check PC, with calls and returns in between, no
  * store and no MMIO access, and every register the same at both. The next
  * iteration then repeats this one exactly until an interrupt handler or DMA
  * changes memory, which only happens when devices are serviced: whole
  * iterations are skipped up to just before the next device deadline. */
-static uint32_t s_ppc, s_pq, s_pstreak, s_pcool, s_pvisits;
+static uint32_t s_ppc, s_pq, s_pstreak, s_pcool, s_pvisits, s_pmiss;
 static int s_psnap;                    /* s_pgpr holds the registers at s_ppc */
 static uint64_t s_pcycle, s_pstores, s_pmmio;
 static uint32_t s_pgpr[32], s_phi, s_plo;
@@ -89,7 +90,15 @@ static void poll_reset(uint32_t check_pc)
     s_ppc = check_pc;
     s_pstores = g_guest_store_count;
     s_pmmio = g_mmio_access_count;
-    s_psnap = 0; s_pstreak = 0; s_pvisits = 0; s_pcool = 0;
+    s_psnap = 0; s_pstreak = 0; s_pvisits = 0; s_pcool = 0; s_pmiss = 0;
+}
+
+static void poll_snap(CPUState *cpu)
+{
+    memcpy(&s_pgpr[1], &cpu->gpr[1], 31 * 4);
+    s_phi = cpu->hi; s_plo = cpu->lo;
+    s_pcycle = psx_get_cycle_count();
+    s_psnap = 1; s_pstreak = 0;
 }
 
 static void poll_loop_check(CPUState *cpu, uint32_t check_pc)
@@ -98,26 +107,31 @@ static void poll_loop_check(CPUState *cpu, uint32_t check_pc)
         poll_reset(check_pc);
         return;
     }
+    if (s_pcool) {                         /* a loop that changes registers: look again later */
+        if (--s_pcool == 0) poll_reset(check_pc);
+        return;
+    }
+    if (s_ppc == 0) {                      /* moved on from a PC visited with other registers */
+        s_ppc = check_pc;
+        s_pvisits = 0;
+        if (psx_get_in_exception() == 0) poll_snap(cpu);
+        return;
+    }
     if (check_pc != s_ppc) {               /* inside the iteration */
         if (++s_pvisits > 64) poll_reset(check_pc);
         return;
     }
     s_pvisits = 0;
-    if (s_pcool) {                         /* a loop that changes registers: look again later */
-        if (--s_pcool == 0) s_psnap = 0;
-        return;
-    }
     if (psx_get_in_exception() != 0) { poll_reset(check_pc); return; }
+    if (!s_psnap) { poll_snap(cpu); return; }
     uint64_t cyc = psx_get_cycle_count(), last = s_pcycle;
     s_pcycle = cyc;
-    if (!s_psnap) {
-        memcpy(&s_pgpr[1], &cpu->gpr[1], 31 * 4);
-        s_phi = cpu->hi; s_plo = cpu->lo;
-        s_psnap = 1; s_pstreak = 0;
-        return;
-    }
     if (cpu->hi != s_phi || cpu->lo != s_plo || memcmp(&cpu->gpr[1], &s_pgpr[1], 31 * 4) != 0) {
-        s_psnap = 0; s_pstreak = 0; s_pcool = 256;
+        /* A PC can come round more than once an iteration (a call made
+         * twice with other arguments): try the next one, a few times. */
+        s_psnap = 0; s_pstreak = 0;
+        if (++s_pmiss >= 16) s_pcool = 256;
+        else s_ppc = 0;
         return;
     }
     uint32_t q = (uint32_t)(cyc - last);
@@ -243,7 +257,10 @@ static void cdsync_check(CPUState *cpu, const uint8_t *ram)
 void __wrap_psx_idle_note_check(CPUState *cpu, uint32_t check_pc)
 {
     const uint8_t *ram = memory_get_ram_ptr();
-    if ((check_pc & 0x1FE00000u) != 0) return;            /* RAM only */
+    if ((check_pc & 0x1FE00000u) != 0) {                  /* RAM, or the BIOS ROM's own waits */
+        if ((check_pc & 0x1FF80000u) == 0x1FC00000u) poll_loop_check(cpu, check_pc);
+        return;
+    }
     if (check_pc == CDSYNC_LOOP) {
         cdsync_check(cpu, ram);
         return;
