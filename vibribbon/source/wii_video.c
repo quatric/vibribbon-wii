@@ -6,6 +6,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <gccore.h>
+#include <fat.h>
+#include <wiiuse/wpad.h>
+#include <input_wii.h>
 
 #include "wii_host.h"
 
@@ -27,8 +30,17 @@ static void build_ycbcr_lut(void)
     }
 }
 
+/* The console's Reset and Power buttons and a Wii Remote's power button only
+ * set a flag here (they run in interrupt context); wii_exit_poll acts on it. */
+static volatile int s_exit_req;   /* 1 back to the loader, 2 power off */
+static void on_reset(u32 irq, void *ctx) { (void)irq; (void)ctx; s_exit_req = 1; }
+static void on_power(void) { s_exit_req = 2; }
+static void on_wpad_power(s32 chan) { (void)chan; s_exit_req = 2; }
+
 void wii_video_init(void)
 {
+    SYS_SetResetCallback(on_reset);
+    SYS_SetPowerCallback(on_power);
     s_rmode = VIDEO_GetPreferredMode(NULL);
     s_xfb[0] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(s_rmode));
     s_xfb[1] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(s_rmode));
@@ -52,6 +64,8 @@ static mutex_t s_log_lock = LWP_MUTEX_NULL;   /* libfat is not thread-safe */
 static mutex_t s_ring_lock = LWP_MUTEX_NULL;
 static sem_t s_log_sem = LWP_SEM_NULL;
 static int s_console_off;   /* the game owns the screen: scrolling the console costs a frame copy */
+static VIRetraceCallback s_console_cb;   /* libogc's console copy, set aside while the game shows */
+static u16 s_console_fb_width;
 #define LOG_RING (64 * 1024)
 static char s_ring[LOG_RING];
 static unsigned s_ring_rd, s_ring_wr, s_ring_lost;   /* free-running byte counts */
@@ -149,6 +163,21 @@ void wii_dump_ppm(const uint16_t *vram, int x, int y, int w, int h, const char *
     LWP_MutexUnlock(s_log_lock);
 }
 
+/* Debug aid: write the XFB on screen as it is scanned out: big-endian width
+ * and height in pixels, then the YCbCr 4:2:2 words. */
+void wii_dump_xfb(const char *path)
+{
+    LWP_MutexLock(s_log_lock);
+    FILE *f = fopen(path, "wb");
+    if (f) {
+        uint32_t hdr[2] = { s_rmode->fbWidth, s_rmode->xfbHeight };
+        fwrite(hdr, 4, 2, f);
+        fwrite(s_xfb[s_fb], 2, (size_t)s_rmode->fbWidth * s_rmode->xfbHeight, f);
+        fclose(f);
+    }
+    LWP_MutexUnlock(s_log_lock);
+}
+
 /* Debug aid: write a file under the log lock (libfat is not thread-safe). */
 void wii_write_file(const char *path, const void *a, unsigned na, const void *b, unsigned nb)
 {
@@ -169,10 +198,49 @@ void wii_fatal(const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
+    if (s_console_off) {   /* give the screen back to the console */
+        s_rmode->fbWidth = s_console_fb_width;
+        VIDEO_Configure(s_rmode);
+        VIDEO_ClearFrameBuffer(s_rmode, s_xfb[s_fb], COLOR_BLACK);
+        VIDEO_SetPostRetraceCallback(s_console_cb);
+        VIDEO_Flush();
+    }
     s_console_off = 0;
     wii_log("\n\nFATAL: %s\n\nPress HOME to exit.\n", msg);
     log_flush();
-    for (;;) VIDEO_WaitVSync();
+    INPUT_Init();   /* safe if already up; the SD check fails before it */
+    for (;;) {
+        VIDEO_WaitVSync();
+        INPUT_Update();
+        wii_exit_poll(INPUT_PadsHeld());
+    }
+}
+
+/* Leave for the loader (the Homebrew Channel), or power off: silence the
+ * audio, write out the log and unmount the SD card first. */
+void wii_exit(int power_off)
+{
+    AUDIO_StopDMA();
+    VIDEO_SetBlack(true);
+    VIDEO_Flush();
+    log_flush();
+    LWP_MutexLock(s_log_lock);
+    if (s_logf) { fclose(s_logf); s_logf = NULL; }
+    fatUnmount("sd:");
+    VIDEO_WaitVSync();
+    if (power_off) SYS_ResetSystem(SYS_POWEROFF, 0, 0);
+    exit(0);
+}
+
+void wii_set_wpad_power_callback(void)
+{
+    WPAD_SetPowerButtonCallback(on_wpad_power);
+}
+
+void wii_exit_poll(uint32_t held)
+{
+    if (held & WPAD_BUTTON_HOME) s_exit_req = 1;
+    if (s_exit_req) wii_exit(s_exit_req == 2);
 }
 
 void wii_present(const uint16_t *vram, int x, int y, int w, int h)
@@ -180,7 +248,15 @@ void wii_present(const uint16_t *vram, int x, int y, int w, int h)
     static uint16_t sx_map[720];   /* XFB column -> PS1 column, rebuilt when the mode changes */
     static int map_x = -1, map_w = -1;
     if (w <= 0 || h <= 0) return;
-    s_console_off = 1;
+    if (!s_console_off) {
+        /* The console copies its whole text buffer onto the displayed XFB at
+         * every retrace, at the console's own stride: over the game's picture
+         * (in another width once the XFB is resized) that leaves its text as
+         * stray dots. Stop it while the game owns the screen. */
+        s_console_fb_width = s_rmode->fbWidth;
+        s_console_cb = VIDEO_SetPostRetraceCallback(NULL);
+        s_console_off = 1;
+    }
 
     /* A display 320 to 640 pixels wide goes into an XFB of the same width and
      * the VI scales it to the screen; others are scaled here. */

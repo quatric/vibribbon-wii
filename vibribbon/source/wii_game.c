@@ -184,7 +184,9 @@ static void on_vblank(void)
         usleep(1000);
 
     INPUT_Update();
-    uint16_t pad = map_buttons(INPUT_PadsHeld());
+    uint32_t held = INPUT_PadsHeld();
+    wii_exit_poll(held);
+    uint16_t pad = map_buttons(held);
 #ifdef VIB_AUTOPLAY
     /* Debug aid for headless runs: from frame VIB_AUTOPLAY to VIB_AUTOPLAY_END,
      * tap Start and then Cross every 300 frames to walk through the menus into
@@ -223,6 +225,8 @@ static void on_vblank(void)
         snprintf(name, sizeof(name), APP_DIR "dump_%05u.ppm", frame);
         wii_dump_ppm(gpu_get_vram(), (int)di.display_x, (int)di.display_y,
                      (int)di.width, (int)di.height, name);
+        snprintf(name, sizeof(name), APP_DIR "xfb_%05u.bin", frame);
+        wii_dump_xfb(name);
     }
 #endif
     static uint64_t t_present, t_last;
@@ -235,7 +239,17 @@ static void on_vblank(void)
         wii_present(gpu_get_vram(), (int)di.display_x, (int)di.display_y,
                     (int)di.width, (int)di.height);
     t_present += gettime() - t0;
-#ifdef VIB_EXIT_SECONDS
+#ifndef VIB_EXIT_SECONDS
+    /* Release builds: how 500 frames (10 s) kept up with real time. */
+    if (frame % 500 == 0) {
+        uint64_t now = gettime();
+        unsigned under, drop, rendered;
+        wii_audio_stats(&under, &drop, &rendered);
+        wii_log("frame %u: 500 frames in %u ms, audio queued %u underruns %u\n", frame,
+                (unsigned)ticks_to_millisecs(now - t_last), (unsigned)wii_audio_queued(), under);
+        t_last = now;
+    }
+#else
     /* Debug runs: timing and device stats every 30 frames. */
     if (frame % 30 == 0) {
         uint64_t now = gettime();
@@ -272,8 +286,6 @@ static void on_vblank(void)
         }
         t_last = now; t_present = 0;
     }
-#else
-    (void)t_last;
 #endif
 }
 
@@ -335,6 +347,7 @@ void wii_run_game(void)
     wii_log("Vib-Ribbon (recompiled) starting\n");
 
     INPUT_Init();
+    wii_set_wpad_power_callback();
     wii_stage(3, "libwiiinput up");
 
     /* gen.sh registers exactly one BIOS: the user's SCPH-5552 or OpenBIOS. */
