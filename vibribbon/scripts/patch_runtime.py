@@ -349,8 +349,9 @@ EXACT.append(("src/memory.c",
      "        text_page_gen[page]++;\n"
      "    } else {\n"
      "        uint32_t c = phys >> TEXT_CHUNK_SHIFT;\n"
-     "        if (!(text_verified_bitmap[c >> 5] & (1u << (c & 31u))))\n"
+     "        if (!(text_verified_bitmap[c >> 5] & (1u << (c & 31u)))) {\n"
      "            text_page_gen[phys >> DIRTY_RAM_PAGE_SHIFT]++;\n"
+     "        }\n"
      "    }\n"))
 EXACT.append(("src/memory.c",
      "    memset(text_diverged_bitmap, 0, sizeof(text_diverged_bitmap));\n"
@@ -758,7 +759,8 @@ EXACT.append(("src/memory.c",
      "static uint32_t text_epoch = 1;\n",
      "static uint32_t text_epoch = 1;\n"
      "static uint32_t text_seq;               /* bumped with any text_page_gen / text_epoch */\n"))
-PATCHES.append(("src/memory.c", r"(text_page_gen\[[^\]\n]*\]\+\+;|text_epoch\+\+;)", r"\1 text_seq++;"))
+PATCHES.append(("src/memory.c", r"text_page_gen\[([^\]\n]*)\]\+\+;", r"text_page_gen[\1]++; TEXT_SEQ_PAGE(\1);"))
+PATCHES.append(("src/memory.c", r"text_epoch\+\+;", r"text_epoch++; text_seq++;"))
 EXACT.append(("src/memory.c",
      "    TextRangeMemo *m = &s_range_memo[((uintptr_t)lo_len_pairs >> 3) & 511u];\n"
      "    if (m->pairs == lo_len_pairs && m->count == count && m->epoch == text_epoch &&\n"
@@ -938,6 +940,25 @@ for _fn, _ty, _sz in (("psx_write_half", "uint16_t", 2), ("psx_write_byte", "uin
          "    if (!g_overlay_flush_pending_cycles && g_ls_mode == 0 && !g_ds_recording &&\n"
          "        psx_write_ram_fast(addr, val, %d)) return;\n"
          "#endif\n" % (_fn, _ty, _sz)))
+
+# The guard's change counter, for the host's dispatch caches. A write into a
+# text page that holds no compiled code (the EXE's data) changes no range's
+# answer, so once the host has registered every program's code ranges only
+# writes into code pages count.
+EXACT.append(("src/memory.c",
+     "static uint32_t text_seq;               /* bumped with any text_page_gen / text_epoch */\n",
+     "static uint32_t text_seq;               /* bumped with any text_page_gen / text_epoch */\n"
+     "static uint8_t text_code_page[RAM_SIZE >> 12];\n"
+     "static int text_code_pages_known;\n"
+     "#define TEXT_SEQ_PAGE(pg) do { if (!text_code_pages_known || text_code_page[(pg)]) text_seq++; } while (0)\n"
+     "uint32_t dirty_ram_text_seq(void) { return text_seq; }\n"
+     "void dirty_ram_text_note_code_range(uint32_t lo, uint32_t len) {\n"
+     "    uint32_t phys = lo & 0x1FFFFFFFu;\n"
+     "    if (len == 0 || phys >= RAM_SIZE) return;\n"
+     "    uint32_t end = len > RAM_SIZE - phys ? RAM_SIZE - 1u : phys + len - 1u;\n"
+     "    for (uint32_t pg = phys >> 12; pg <= end >> 12; pg++) text_code_page[pg] = 1;\n"
+     "}\n"
+     "void dirty_ram_text_code_ranges_done(void) { text_code_pages_known = 1; text_seq++; }\n"))
 
 # CD-DA sectors as device events. The next sector (and with it the play
 # position GetlocP reports) arrived at whatever device-pass boundary followed

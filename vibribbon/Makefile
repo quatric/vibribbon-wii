@@ -86,8 +86,9 @@ $(OBJ)/host_%.o: source/%.c | $(OBJ)
 # generated code: boot / main / bios each include their own decls header. The
 # two game programs export identical dispatch entry points, so each gets its
 # own prefix (combined again in source/wii_dispatch.c).
-DISP := psx_dispatch_game_compiled psx_game_address_in_text psx_game_is_function_entry \
-        psx_game_text_native_ok psx_game_text_native_ok_full
+DISP := psx_dispatch_game_compiled psx_dispatch_game_compiled_checked psx_game_address_in_text \
+        psx_game_is_function_entry psx_game_text_native_ok psx_game_text_native_ok_full \
+        psx_game_code_ranges_each
 ren = $(foreach s,$(DISP),-D$(s)=$(1)_$(s))
 # The generated code is most of the binary; it fits MEM1 at -O2 because the
 # runtime's cold arrays live in MEM2 (ld/rvl.ld).
